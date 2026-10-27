@@ -1,0 +1,109 @@
+# ---- Secrets and local environment ----
+# Never commit these. Keep a committed .env.example with placeholder values instead.
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+*.cer
+*.der
+*.keystore
+*.jks
+credentials.json
+service-account*.json
+.npmrc
+.yarnrc
+.netrc
+
+# ---- Chrome extension signing / packaging ----
+# key.pem is the CRX private key: leaking it lets anyone publish as this extension.
+key.pem
+*.crx
+*.zip
+*.xpi
+web-ext-artifacts/
+
+# ---- Dependencies ----
+node_modules/
+jspm_packages/
+bower_components/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ---- Build output ----
+dist/
+dist-ssr/
+build/
+out/
+release/
+.vite/
+*.tsbuildinfo
+
+# ---- Test, coverage and tooling caches ----
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/
+.vitest/
+.cache/
+.temp/
+.tmp/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+
+# ---- Logs ----
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# ---- Editor and IDE ----
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*~
+
+# ---- OS cruft ----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ---- Claude Code / agent local state ----
+.claude/settings.json
+.claude/.credentials.json
+CLAUDE.local.md
+
+# ---- Scratch ----
+scratch/
+tmp/
+*.bak
+*.orig
+*.rej
+
+
