@@ -7,7 +7,7 @@ import { normalizeHostname } from './hostname';
 
 type Site = Settings['protectedSites'][number];
 
-export const DEFAULT_SETTINGS: Settings = {
+const SHIPPED: Settings = {
   schemaVersion: 1,
   automationEnabled: false,
   inactivityMinutes: 15,
@@ -19,6 +19,18 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   deviceMemoryMonitoringEnabled: false,
 };
+
+// Deep-frozen: this object is exported and imported by other modules and tests, so a
+// single push would otherwise poison every later parse. The fallback paths clone it.
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null) {
+    for (const key of Object.keys(value)) deepFreeze((value as Record<string, unknown>)[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+export const DEFAULT_SETTINGS: Settings = deepFreeze(SHIPPED);
 
 function cloneSites(sites: readonly Site[]): Site[] {
   return sites.map((site) => ({ ...site }));
@@ -67,9 +79,16 @@ function readSites(value: unknown): Site[] | undefined {
     if (!isPlainObject(entry)) continue;
     const hostname = readField(entry, 'hostname', (v) => (typeof v === 'string' ? normalizeHostname(v) : null));
     if (hostname === null || hostname === undefined) continue;
+    // A non-boolean includeSubdomains states no intention, so it takes the field
+    // default (false) like any other invalid field. That does not conflict with the
+    // broader-wins rule below, which compares two stated intentions. The result is
+    // visible and correctable in the settings UI.
     const includeSubdomains = readField(entry, 'includeSubdomains', readBoolean) === true;
     merged.set(hostname, (merged.get(hostname) ?? false) || includeSubdomains);
   }
+  // An empty array is a deliberate "no protections". A non-empty array with no
+  // usable entry is corruption, so the caller falls back to the defaults.
+  if (merged.size === 0 && value.length > 0) return undefined;
   return [...merged].map(([hostname, includeSubdomains]) => ({ hostname, includeSubdomains }));
 }
 

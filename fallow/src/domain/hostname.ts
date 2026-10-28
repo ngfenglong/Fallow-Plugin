@@ -1,11 +1,33 @@
 // Pure domain helpers: no browser API access in this file.
 
-// Lowercases, strips one trailing dot, and rejects anything that is not a bare
-// hostname (path/port separators, whitespace, or an empty label).
+const MAX_LABEL_LENGTH = 63;
+// Characters that can never appear in a URL.hostname a tab would report. Any of
+// these would be silently dropped or re-read by the URL parser, so a stored entry
+// containing one could never match.
+const FORBIDDEN = /[\s\/\\?#@%*:]/;
+
+// Returns the hostname exactly as URL.hostname reports it for a real tab (lowercased,
+// punycode for IDN, IPv6 in brackets), or null when the input cannot be one.
+// A single trailing dot is accepted and removed. Single-label hosts such as
+// 'localhost' are accepted.
 export function normalizeHostname(input: string): string | null {
-  let host = input.toLowerCase();
+  const trimmed = input.trim();
+  if (trimmed === '') return null;
+  const isIpv6 = trimmed.startsWith('[');
+  if (!isIpv6 && FORBIDDEN.test(trimmed)) return null;
+
+  let host: string;
+  try {
+    host = new URL(`http://${trimmed}`).hostname;
+  } catch {
+    return null;
+  }
+  host = host.toLowerCase();
   if (host.endsWith('.')) host = host.slice(0, -1);
-  if (host === '' || /[/:\s]/.test(host)) return null;
-  if (host.split('.').some((label) => label === '')) return null;
+  if (host === '' || host.startsWith('.')) return null;
+  if (isIpv6) return host;
+
+  const labels = host.split('.');
+  if (labels.some((label) => label === '' || label.length > MAX_LABEL_LENGTH)) return null;
   return host;
 }
