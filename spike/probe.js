@@ -192,7 +192,6 @@ async function probe3() {
     const actives = await chrome.tabs.query({ active: true });
     const elig = [];
     for (const t of actives) {
-      if (t.autoDiscardable === undefined) continue;
       if (await baseEligible(t)) elig.push({ t, focused: (await getWin(t.windowId)).focused });
     }
     log(`active tabs: ${actives.length}; eligible (http(s), normal window, not pinned/audible/probe page): ${elig.length}`);
