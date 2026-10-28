@@ -1,4 +1,5 @@
 // Pure domain helpers: no browser API access in this file.
+import type { Settings } from './types';
 
 const MAX_LABEL_LENGTH = 63;
 // Characters that can never appear in a URL.hostname a tab would report. Any of
@@ -44,4 +45,36 @@ export function normalizeHostname(input: string): string | null {
   const labels = host.split('.');
   if (labels.some((label) => label === '' || label.length > MAX_LABEL_LENGTH)) return null;
   return host;
+}
+
+// Returns the normalised hostname of a tab URL, or null for anything that is not an
+// http(s) URL with a host. Never throws: one unparseable tab must not break a scan.
+export function hostnameOf(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  // URL.hostname is already punycode and excludes the port. An empty hostname
+  // (possible for some schemes) is guarded here rather than loosening normalizeHostname.
+  if (parsed.hostname === '') return null;
+  return normalizeHostname(parsed.hostname);
+}
+
+export function isSupportedUrl(url: string): boolean {
+  return hostnameOf(url) !== null;
+}
+
+// Dot-boundary matching only. Never substring or regex matching: 'notexample.com'
+// must not match a protection for 'example.com'.
+export function matchesProtectedSite(
+  host: string,
+  sites: readonly Settings['protectedSites'][number][],
+): boolean {
+  return sites.some((site) => {
+    if (host === site.hostname) return true;
+    return site.includeSubdomains && host.endsWith('.' + site.hostname);
+  });
 }
