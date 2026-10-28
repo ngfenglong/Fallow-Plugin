@@ -21,8 +21,37 @@ describe('reason codes', () => {
     expect(reasonLabel('USED_RECENTLY')).toBe('Used just now');
   });
 
-  it('orders reasons for display deterministically', () => {
-    expect(sortReasons(['USED_RECENTLY', 'SELECTED', 'SITE_PROTECTED']))
-      .toEqual(['SELECTED', 'SITE_PROTECTED', 'USED_RECENTLY']);
+  describe('sortReasons', () => {
+    it('orders reasons for display deterministically', () => {
+      expect(sortReasons(['USED_RECENTLY', 'SELECTED', 'SITE_PROTECTED']))
+        .toEqual(['SELECTED', 'SITE_PROTECTED', 'USED_RECENTLY']);
+    });
+
+    it('uses canonical display rank, not alphabetical order', () => {
+      // Alphabetical would put AUDIBLE first.
+      expect(sortReasons(['TAB_GONE', 'AUDIBLE', 'SELECTED']))
+        .toEqual(['SELECTED', 'AUDIBLE', 'TAB_GONE']);
+    });
+
+    it('sorts a fully reversed canonical list back into canonical order', () => {
+      expect(sortReasons([...REASON_CODES].reverse())).toEqual([...REASON_CODES]);
+    });
+
+    it('keeps duplicates adjacent', () => {
+      expect(sortReasons(['AUDIBLE', 'SELECTED', 'AUDIBLE']))
+        .toEqual(['SELECTED', 'AUDIBLE', 'AUDIBLE']);
+    });
+
+    it('returns an empty array for empty input', () => {
+      expect(sortReasons([])).toEqual([]);
+    });
+
+    it('does not mutate its input', () => {
+      const input = ['TAB_GONE', 'AUDIBLE', 'SELECTED'] as const;
+      const copy = [...input];
+      const out = sortReasons(input);
+      expect(input).toEqual(copy);
+      expect(out).not.toBe(input);
+    });
   });
 });
