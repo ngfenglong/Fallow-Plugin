@@ -2,6 +2,8 @@
 
 **TEMPLATE: awaiting a run against a real profile. No results below have been measured.**
 
+**Privacy: the probe output logs tab ids and hostnames only. Check anything you paste here before committing.**
+
 - Chrome version:
 - macOS version:
 
@@ -17,7 +19,7 @@ Result:
 
 Result:
 
-## Probe 4: discard a tab with autoDiscardable: false - rejected or honoured
+## Probe 4: tabs that already carry autoDiscardable === false (read-only; no mutation, no discard)
 
 Result:
 
@@ -33,7 +35,8 @@ Result:
 
 Result:
 
-- Round 1 (before / after / delta, bytes and GiB):
+- Control (no discard, 10 s):
+- Round 1 (before / after / delta, bytes and GiB; tabs requested and confirmed discarded):
 - Round 2:
 - Round 3:
 
