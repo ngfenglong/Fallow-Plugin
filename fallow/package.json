@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:dist": "vite build && vitest run --config vitest.dist.config.ts"
   },
   "dependencies": {
     "react": "19.3.1",
