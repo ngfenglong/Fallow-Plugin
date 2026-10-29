@@ -20,7 +20,7 @@ let adapter: ChromeAdapter;
 let repos: ReturnType<typeof createRepos>;
 
 function mount(a: ChromeAdapter = adapter) {
-  tracker = createTracker({ adapter: a, activity: repos.activity, session: repos.session });
+  tracker = createTracker({ adapter: a, activity: repos.activity });
 }
 function seedFake(tabs: Array<{ id: number; windowId: number; active?: boolean }>) {
   fake.tabs.splice(0, fake.tabs.length, ...tabs.map((t) => ({ active: false, ...t })));
@@ -118,6 +118,14 @@ describe('tracker: brief behaviours', () => {
 });
 
 describe('tracker: beyond the brief', () => {
+  it('reconcile of an empty list is a no-op: records kept, zero writes', async () => {
+    await tracker.reconcile([facts({ tabId: 1 }), facts({ tabId: 2 })], 1_000);
+    const before = structuredClone(await tracker.snapshot());
+    storage.session.writes = 0;
+    await tracker.reconcile([], 2_000);
+    expect(await tracker.snapshot()).toEqual(before);
+    expect(storage.session.writes).toBe(0);
+  });
   it('reconcile issues no queryTabs call of its own (the caller supplies the tabs)', async () => {
     await tracker.reconcile([facts({ tabId: 1 })], 1_000);
     expect(fake.counts['tabs.query'] ?? 0).toBe(0);

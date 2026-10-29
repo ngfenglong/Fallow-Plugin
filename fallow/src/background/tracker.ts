@@ -4,7 +4,7 @@
 // rejects to the caller, who can reconcile. Operations run one at a time, so two
 // overlapping events cannot each start from the same stored map and lose one change.
 import type { ChromeAdapter } from '../platform/chrome-adapter';
-import type { ActivityRepo, SessionRepo } from '../platform/storage';
+import type { ActivityRepo } from '../platform/storage';
 import type { TabActivity, TabFacts } from '../domain/types';
 
 export interface Tracker {
@@ -22,7 +22,7 @@ type Map_ = Record<number, TabActivity>;
 // A timestamp from the future means the clock moved backward: treat it as now.
 const clamp = (since: number, now: number): number => (since > now ? now : since);
 
-export function createTracker(deps: { adapter: ChromeAdapter; activity: ActivityRepo; session: SessionRepo }): Tracker {
+export function createTracker(deps: { adapter: ChromeAdapter; activity: ActivityRepo }): Tracker {
   const { adapter, activity } = deps;
 
   let tail: Promise<unknown> = Promise.resolve();
@@ -43,6 +43,11 @@ export function createTracker(deps: { adapter: ChromeAdapter; activity: Activity
 
   return {
     reconcile(tabs, now) {
+      // A real profile always has at least one tab, so an empty list is almost
+      // certainly a failed query. Treating it as truth would erase every timer and
+      // silently delay all automatic unloading by a full threshold. Records for
+      // absent tabs linger until the next non-empty reconcile instead.
+      if (tabs.length === 0) return Promise.resolve();
       return update(async (map) => {
         const next: Map_ = {};
         for (const tab of tabs) {
