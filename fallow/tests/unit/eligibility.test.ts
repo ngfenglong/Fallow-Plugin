@@ -238,13 +238,18 @@ describe('decide: totality, purity and vocabulary', () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     const tab = facts({ active: true, url: 'https://chatgpt.com/c/1' });
     const activity: TabActivity = { tabId: 1, backgroundSince: 0, protectedForSession: false };
-    const original = { settings: structuredClone(settings), tab: structuredClone(tab), activity: structuredClone(activity) };
+    const dashboard = [1];
+    const original = {
+      settings: structuredClone(settings), tab: structuredClone(tab),
+      activity: structuredClone(activity), dashboard: [...dashboard],
+    };
     for (const mode of MODES) {
-      decide({ tab, settings, activity, mode, now: 3_600_000, graceUntil: 3_600_001, dashboardOriginTabIds: [1] });
+      decide({ tab, settings, activity, mode, now: 3_600_000, graceUntil: 3_600_001, dashboardOriginTabIds: dashboard });
     }
     expect(settings).toEqual(original.settings);
     expect(tab).toEqual(original.tab);
     expect(activity).toEqual(original.activity);
+    expect(dashboard).toEqual(original.dashboard);
   });
 
   it('only ever emits codes that are members of REASON_CODES', () => {
@@ -282,5 +287,125 @@ describe('decide: totality, purity and vocabulary', () => {
 
   it('returns reasons: [] and eligible: true for a tab with no applicable reason', () => {
     expect(decide(input({ mode: 'manual-single' }))).toEqual({ eligible: true, reasons: [], evaluatedAt: 3_600_000 });
+  });
+});
+
+describe('decide: fails closed on values it cannot interpret', () => {
+  const RECENT_OR_UNKNOWN = { tabId: 1, backgroundSince: 0, protectedForSession: false };
+
+  it('holds a tab when now is NaN, under auto and manual-bulk', () => {
+    const auto = decide(input({ now: NaN, mode: 'auto' }));
+    expect(auto.eligible).toBe(false);
+    expect(auto.reasons).toContain('NOT_OLD_ENOUGH');
+    const bulk = decide(input({ now: NaN, mode: 'manual-bulk' }));
+    expect(bulk.eligible).toBe(false);
+    expect(bulk.reasons).toContain('USED_RECENTLY');
+  });
+
+  it('holds automatic runs when now is NaN during grace', () => {
+    const d = decide(input({ now: NaN, mode: 'auto', graceUntil: 3_600_001 }));
+    expect(d.eligible).toBe(false);
+    expect(d.reasons).toContain('STARTUP_GRACE');
+  });
+
+  it('holds a tab when backgroundSince is NaN', () => {
+    const activity = { tabId: 1, backgroundSince: NaN, protectedForSession: false };
+    expect(decide(input({ activity, mode: 'auto' })).eligible).toBe(false);
+    expect(decide(input({ activity, mode: 'manual-bulk' })).eligible).toBe(false);
+  });
+
+  it('holds a tab when backgroundSince and now are both Infinity (NaN elapsed)', () => {
+    const activity = { tabId: 1, backgroundSince: Infinity, protectedForSession: false };
+    expect(decide(input({ activity, now: Infinity, mode: 'auto' })).eligible).toBe(false);
+    expect(decide(input({ activity, now: Infinity, mode: 'manual-bulk' })).eligible).toBe(false);
+  });
+
+  it('holds a tab when now is -Infinity', () => {
+    expect(decide(input({ now: -Infinity, activity: RECENT_OR_UNKNOWN, mode: 'auto' })).eligible).toBe(false);
+    expect(decide(input({ now: -Infinity, activity: RECENT_OR_UNKNOWN, mode: 'manual-bulk' })).eligible).toBe(false);
+  });
+
+  it('keeps a tab idle forever (backgroundSince -Infinity) eligible in every mode', () => {
+    const activity = { tabId: 1, backgroundSince: -Infinity, protectedForSession: false };
+    for (const mode of MODES) {
+      expect(decide(input({ activity, mode })).eligible).toBe(true);
+    }
+  });
+
+  it('reads NaN elapsed as 0 from backgroundElapsedMs', () => {
+    expect(backgroundElapsedMs({ tabId: 1, backgroundSince: NaN, protectedForSession: false }, 1_000)).toBe(0);
+    expect(backgroundElapsedMs({ tabId: 1, backgroundSince: Infinity, protectedForSession: false }, Infinity)).toBe(0);
+  });
+
+  it('holds a tab under an unknown runtime mode, even though it would otherwise be eligible', () => {
+    const d = decide(input({ mode: 'bogus' as never }));
+    expect(d.eligible).toBe(false);
+    expect(d.reasons).toContain('NOT_OLD_ENOUGH');
+  });
+
+  it('holds a tab under an unknown mode for a tab already fully eligible under manual-single', () => {
+    expect(decide(input({ mode: 'manual-single' })).eligible).toBe(true);
+    expect(decide(input({ mode: undefined as never })).eligible).toBe(false);
+  });
+});
+
+describe('decide: threshold clamp', () => {
+  const ONE_SECOND_IDLE = { tabId: 1, backgroundSince: 3_599_000, protectedForSession: false };
+  it.each([0, -5, NaN, -Infinity])('clamps inactivityMinutes %s to the minimum under auto', (minutes) => {
+    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: minutes };
+    const d = decide(input({ settings, activity: ONE_SECOND_IDLE, mode: 'auto' }));
+    expect(d.eligible).toBe(false);
+    expect(d.reasons).toContain('NOT_OLD_ENOUGH');
+  });
+
+  it('still makes a tab eligible once it is idle for the clamped minimum', () => {
+    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: 0 };
+    const activity = { tabId: 1, backgroundSince: 3_600_000 - THRESHOLD_MIN * 60_000, protectedForSession: false };
+    expect(decide(input({ settings, activity, mode: 'auto' })).eligible).toBe(true);
+  });
+});
+
+describe('decide: reason ordering is canonical, not push order', () => {
+  it('orders UNSUPPORTED_URL after STARTUP_GRACE for a chrome:// tab that is active within grace', () => {
+    const d = decide(input({
+      tab: facts({ url: 'chrome://x', active: true }),
+      mode: 'auto',
+      graceUntil: 3_600_001,
+    }));
+    expect(d.reasons).toEqual(['SELECTED', 'STARTUP_GRACE', 'UNSUPPORTED_URL']);
+  });
+
+  it('orders NOT_OLD_ENOUGH before STARTUP_GRACE in a combined case', () => {
+    const activity = { tabId: 1, backgroundSince: 3_599_000, protectedForSession: false };
+    const d = decide(input({ activity, mode: 'auto', graceUntil: 3_600_001 }));
+    expect(d.reasons).toEqual(['NOT_OLD_ENOUGH', 'STARTUP_GRACE']);
+  });
+});
+
+describe('decide: the URL gate on hostile URLs', () => {
+  it('reports UNSUPPORTED_URL for a 10,000-character label and a javascript: URL', () => {
+    const longLabel = 'https://' + 'a'.repeat(10_000) + '.com/';
+    for (const url of [longLabel, 'javascript:alert(1)']) {
+      for (const mode of MODES) {
+        const d = decide(input({ tab: facts({ url }), mode }));
+        expect(d.eligible).toBe(false);
+        expect(d.reasons).toContain('UNSUPPORTED_URL');
+      }
+    }
+  });
+});
+
+describe('lifecycleOf: contradictory facts', () => {
+  it('treats discarded as unloaded even when status says complete or loading', () => {
+    expect(lifecycleOf(facts({ discarded: true, status: 'complete' }))).toBe('unloaded');
+    expect(lifecycleOf(facts({ discarded: true, status: 'loading' }))).toBe('unloaded');
+  });
+});
+
+describe('decide: the mutation snapshot covers every input array', () => {
+  it('does not mutate dashboardOriginTabIds', () => {
+    const dashboard = [1, 2];
+    decide(input({ mode: 'manual-bulk', dashboardOriginTabIds: dashboard }));
+    expect(dashboard).toEqual([1, 2]);
   });
 });
