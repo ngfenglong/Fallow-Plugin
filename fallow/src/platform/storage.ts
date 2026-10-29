@@ -200,20 +200,30 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
 
   const history: HistoryRepo = {
     // One read and one write per call, whatever the number of entries. Age is applied
-    // first, then the newest-first count cap, so the stored blob is always bounded.
+    // first, then the newest-first count cap. History is lossy by design, so this never
+    // rejects: it runs inside the unload executor, and a log write must not abort the
+    // tab operation that triggered it. A failed read skips the write entirely, so
+    // existing history is never overwritten with only the new batch.
     async append(entries, now) {
-      if (!Number.isFinite(now)) throw new RangeError('history append requires a finite now');
-      if (entries.length === 0) return;
-      // A storage failure here propagates rather than overwriting history with []. Only
-      // a corrupt value, which parseHistory tolerates, is treated as empty.
-      const existing = parseHistory(await local.get(KEYS.history));
-      const incoming = entries.map(parseHistoryRow).filter((row): row is HistoryEntry => row !== undefined);
-      const cutoff = now - HISTORY_MAX_AGE_MS;
-      const kept = [...incoming, ...existing]
-        .filter((row) => row.at >= cutoff)
-        .sort((a, b) => b.at - a.at)
-        .slice(0, HISTORY_MAX_ENTRIES);
-      await local.set(KEYS.history, kept);
+      let kept: HistoryEntry[];
+      try {
+        if (entries.length === 0) return;
+        const existing = parseHistory(await local.get(KEYS.history));
+        const incoming = entries.map(parseHistoryRow).filter((row): row is HistoryEntry => row !== undefined);
+        // A non-finite now skips the age trim only; the count cap still applies.
+        const cutoff = Number.isFinite(now) ? now - HISTORY_MAX_AGE_MS : Number.NEGATIVE_INFINITY;
+        kept = [...incoming, ...existing]
+          .filter((row) => row.at >= cutoff)
+          .sort((a, b) => b.at - a.at)
+          .slice(0, HISTORY_MAX_ENTRIES);
+      } catch {
+        return;
+      }
+      try {
+        await local.set(KEYS.history, kept);
+      } catch {
+        // Dropping one batch is acceptable; the existing log is untouched.
+      }
     },
     async read() {
       let raw: unknown;
@@ -225,9 +235,34 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
       return parseHistory(raw);
     },
     async clear() {
-      await local.set(KEYS.history, []);
+      try {
+        await local.set(KEYS.history, []);
+      } catch {
+        // Never throws into the caller, for the same reason as append.
+      }
     },
   };
 
   return { settings, activity, session: sessionRepo, history };
+}
+
+// Bridges a real chrome.storage area to StorageArea. get rejects when Chrome cannot
+// read, so the caller can tell "absent" (undefined) from "could not read" and never
+// overwrite stored data it could not see. set resolves on failure, because every write
+// through the repositories is lossy by design. Note: chrome.storage.session has a
+// smaller quota than local, and session activity records are its main consumer.
+export function createChromeStorageArea(area: chrome.storage.StorageArea): StorageArea {
+  return {
+    async get(key) {
+      const items: Record<string, unknown> | undefined = await area.get(key);
+      return items?.[key];
+    },
+    async set(key, value) {
+      try {
+        await area.set({ [key]: value });
+      } catch {
+        // Lossy by design: the caller is not told, and the stored value is unchanged.
+      }
+    },
+  };
 }

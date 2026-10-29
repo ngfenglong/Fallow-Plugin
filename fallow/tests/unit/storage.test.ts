@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createRepos, KEYS, type HistoryEntry } from '../../src/platform/storage';
+import { createChromeStorageArea, createRepos, KEYS, type HistoryEntry } from '../../src/platform/storage';
 import { DEFAULT_SETTINGS, parseSettings } from '../../src/domain/settings';
 import { HISTORY_MAX_AGE_MS, HISTORY_MAX_ENTRIES, THRESHOLD_MIN } from '../../src/domain/constants';
 import { createFakeStorage, type FakeStorage } from '../fake-storage';
@@ -301,10 +301,57 @@ describe('HistoryRepo', () => {
     await expect(repos.history.read()).resolves.toEqual([]);
   });
 
-  it('refuses a non-finite now rather than silently erasing history', async () => {
+  it('applies only the count cap when now is non-finite, and does not throw', async () => {
+    await repos.history.append([entry({ at: 5 })], 6);
+    await expect(repos.history.append([entry({ at: 1 })], Number.NaN)).resolves.toBeUndefined();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([5, 1]);
+    const many = Array.from({ length: 600 }, (_, i) => entry({ at: i }));
+    await expect(repos.history.append(many, Number.NaN)).resolves.toBeUndefined();
+    expect(await repos.history.read()).toHaveLength(HISTORY_MAX_ENTRIES);
+  });
+
+  it('resolves and leaves existing history intact when the read fails', async () => {
     await repos.history.append([entry({ at: 1 })], 2);
-    await expect(repos.history.append([entry({ at: 3 })], Number.NaN)).rejects.toThrow(RangeError);
-    await expect(repos.history.read()).resolves.toHaveLength(1);
+    fake.local.writes = 0;
+    fake.local.throwOn.set(`get:${KEYS.history}`, new Error('read failed'));
+    await expect(repos.history.append([entry({ at: 3 })], 4)).resolves.toBeUndefined();
+    expect(fake.local.writes).toBe(0);
+    fake.local.throwOn.clear();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
+  });
+
+  it('resolves for a rejected read without writing', async () => {
+    await repos.history.append([entry({ at: 1 })], 2);
+    fake.local.writes = 0;
+    fake.local.rejectOn.set(`get:${KEYS.history}`, new Error('read failed'));
+    await expect(repos.history.append([entry({ at: 3 })], 4)).resolves.toBeUndefined();
+    expect(fake.local.writes).toBe(0);
+    fake.local.rejectOn.clear();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
+  });
+
+  it('resolves and leaves existing history intact when the write fails', async () => {
+    await repos.history.append([entry({ at: 1 })], 2);
+    fake.local.throwOn.set(`set:${KEYS.history}`, new Error('write failed'));
+    await expect(repos.history.append([entry({ at: 3 })], 4)).resolves.toBeUndefined();
+    fake.local.throwOn.clear();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
+  });
+
+  it('resolves for a rejected write and leaves existing history intact', async () => {
+    await repos.history.append([entry({ at: 1 })], 2);
+    fake.local.rejectOn.set(`set:${KEYS.history}`, new Error('write failed'));
+    await expect(repos.history.append([entry({ at: 3 })], 4)).resolves.toBeUndefined();
+    fake.local.rejectOn.clear();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
+  });
+
+  it('clear resolves and leaves history intact when the write fails', async () => {
+    await repos.history.append([entry({ at: 1 })], 2);
+    fake.local.throwOn.set(`set:${KEYS.history}`, new Error('write failed'));
+    await expect(repos.history.clear()).resolves.toBeUndefined();
+    fake.local.throwOn.clear();
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
   });
 
   it('keeps entries across two sequential appends', async () => {
@@ -353,5 +400,57 @@ describe('HistoryRepo', () => {
   it('resolves to an empty history when the storage get throws', async () => {
     fake.local.throwOn.set(KEYS.history, new Error('boom'));
     await expect(repos.history.read()).resolves.toEqual([]);
+  });
+});
+
+describe('createChromeStorageArea', () => {
+  type Calls = { gets: string[]; sets: Array<Record<string, unknown>> };
+  function fakeChromeArea(store: Record<string, unknown>) {
+    const calls: Calls = { gets: [], sets: [] };
+    const area = {
+      get: async (key: string) => {
+        calls.gets.push(key);
+        if (store.__failGet) throw new Error('chrome get failed');
+        return key in store ? { [key]: store[key] } : {};
+      },
+      set: async (items: Record<string, unknown>) => {
+        calls.sets.push(items);
+        if (store.__failSet) throw new Error('chrome set failed');
+        Object.assign(store, items);
+      },
+    };
+    return { area: area as unknown as chrome.storage.StorageArea, calls };
+  }
+
+  it('get returns the value at the key, and undefined when absent', async () => {
+    const { area, calls } = fakeChromeArea({ [KEYS.activity]: { 1: 'x' } });
+    const storage = createChromeStorageArea(area);
+    await expect(storage.get(KEYS.activity)).resolves.toEqual({ 1: 'x' });
+    await expect(storage.get('fallow.missing')).resolves.toBeUndefined();
+    expect(calls.gets).toEqual([KEYS.activity, 'fallow.missing']);
+  });
+
+  it('set writes the value under its key', async () => {
+    const store: Record<string, unknown> = {};
+    const { area, calls } = fakeChromeArea(store);
+    await createChromeStorageArea(area).set(KEYS.history, [1]);
+    expect(calls.sets).toEqual([{ [KEYS.history]: [1] }]);
+    expect(store[KEYS.history]).toEqual([1]);
+  });
+
+  it('get rejects when Chrome cannot read, so an append cannot mistake that for an empty log', async () => {
+    const { area } = fakeChromeArea({ __failGet: true });
+    await expect(createChromeStorageArea(area).get(KEYS.history)).rejects.toThrow('chrome get failed');
+  });
+
+  it('set resolves when Chrome rejects the write', async () => {
+    const { area } = fakeChromeArea({ __failSet: true });
+    await expect(createChromeStorageArea(area).set(KEYS.history, [])).resolves.toBeUndefined();
+  });
+
+  it('set resolves when the area throws synchronously', async () => {
+    const throwing = { get: async () => ({}), set: () => { throw new Error('sync'); } };
+    const storage = createChromeStorageArea(throwing as unknown as chrome.storage.StorageArea);
+    await expect(storage.set(KEYS.history, [])).resolves.toBeUndefined();
   });
 });

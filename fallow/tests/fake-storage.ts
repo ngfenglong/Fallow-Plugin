@@ -10,9 +10,9 @@ export type FakeArea = StorageArea & {
   writes: number;
   /** number of get() calls */
   gets: number;
-  /** key -> error thrown synchronously by get/set */
+  /** key -> error thrown synchronously by get/set. Use 'get:key' or 'set:key' to target one op. */
   throwOn: Map<string, Error>;
-  /** key -> error the get/set promise rejects with */
+  /** key -> error the get/set promise rejects with. Use 'get:key' or 'set:key' to target one op. */
   rejectOn: Map<string, Error>;
 };
 
@@ -27,17 +27,17 @@ function createArea(): FakeArea {
     rejectOn: new Map(),
     get(key: string): Promise<unknown> {
       area.gets++;
-      const thrown = area.throwOn.get(key);
+      const thrown = area.throwOn.get(`get:${key}`) ?? area.throwOn.get(key);
       if (thrown) throw thrown;
-      const rejected = area.rejectOn.get(key);
+      const rejected = area.rejectOn.get(`get:${key}`) ?? area.rejectOn.get(key);
       if (rejected) return Promise.reject(rejected);
       return Promise.resolve(area.data.get(key));
     },
     set(key: string, value: unknown): Promise<void> {
       area.writes++;
-      const thrown = area.throwOn.get(key);
+      const thrown = area.throwOn.get(`set:${key}`) ?? area.throwOn.get(key);
       if (thrown) throw thrown;
-      const rejected = area.rejectOn.get(key);
+      const rejected = area.rejectOn.get(`set:${key}`) ?? area.rejectOn.get(key);
       if (rejected) return Promise.reject(rejected);
       area.data.set(key, value);
       return Promise.resolve();
