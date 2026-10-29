@@ -164,8 +164,9 @@ export function createInventory(deps: {
   return { capture };
 }
 
-// Order is the browser's: tabs arrive in browser order and are never sorted. Windows are
-// listed by ascending id, which is also how the session labels are assigned.
+// Order is explicit, not the query's: `rows` arrives already sorted by (windowId, index),
+// and the groups inside a window follow the first appearance of one of their tabs in that
+// order. Windows are listed by ascending id, which is also how the session labels are assigned.
 function buildWindows(
   rows: readonly TabRow[], windows: readonly WindowShape[], groups: readonly GroupShape[],
 ): WindowSection[] {

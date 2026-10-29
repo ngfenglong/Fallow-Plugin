@@ -6,7 +6,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    include: ['tests/unit/**/*.test.{ts,tsx}'],
+    // Both suites, so a file can never sit outside every config's glob and never run.
+    include: ['tests/unit/**/*.test.{ts,tsx}', 'tests/integration/**/*.test.{ts,tsx}'],
     setupFiles: ['./tests/setup.ts'],
   },
 });

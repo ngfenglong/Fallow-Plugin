@@ -3,6 +3,16 @@
 export type FakeTab = Partial<chrome.tabs.Tab>;
 export type DiscardBehaviour = 'confirm' | 'silent-noop' | 'reject';
 
+/** Shorthand call counters, derived from `counts`. Read-only. */
+export type FakeCalls = {
+  discard: number; get: number; query: number; update: number; windowUpdate: number;
+  create: number; groups: number; windows: number;
+  /** tabs.remove / tabs.move: operations Fallow must never perform. */
+  remove: number; move: number;
+  /** tabs.update calls that activated a tab, i.e. an adapter focusTab. */
+  focusTab: number;
+};
+
 export type FakeChrome = {
   api: typeof chrome;
   tabs: FakeTab[];
@@ -24,6 +34,20 @@ export type FakeChrome = {
   /** arguments of every windows.update call */
   windowUpdateCalls: Array<{ windowId: number; props: Record<string, unknown> }>;
   nextId: number;
+  /** Runs inside tabs.discard before the tab changes. `n` is 1-based. May be async. */
+  onBeforeDiscard?: (tabId: number, n: number) => unknown;
+  /** Runs inside tabs.discard after the tab changes. `n` is 1-based. May be async. */
+  onAfterDiscard?: (tabId: number, n: number) => unknown;
+  /** Discards currently inside tabs.discard, and the high-water mark of that number. */
+  inFlightDiscards: number;
+  maxConcurrentDiscards: number;
+  /** Derived counters; see FakeCalls. */
+  readonly calls: FakeCalls;
+  /** Replaces the whole tab list in place. */
+  setTabs: (tabs: FakeTab[]) => void;
+  /** Selects one tab and deselects every other tab in its window. */
+  setActive: (tabId: number) => void;
+  removeTab: (tabId: number) => void;
 };
 
 export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
@@ -44,6 +68,31 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
     updateCalls: [],
     windowUpdateCalls: [],
     nextId: 1000,
+    inFlightDiscards: 0,
+    maxConcurrentDiscards: 0,
+    get calls(): FakeCalls {
+      const n = (key: string) => f.counts[key] ?? 0;
+      return {
+        discard: n('tabs.discard'), get: n('tabs.get'), query: n('tabs.query'),
+        update: n('tabs.update'), windowUpdate: n('windows.update'), create: n('tabs.create'),
+        groups: n('tabGroups.query'), windows: n('windows.getAll'),
+        remove: f.forbidden.remove, move: f.forbidden.move,
+        focusTab: f.updateCalls.filter((p) => p.active === true).length,
+      };
+    },
+    setTabs(tabs: FakeTab[]) {
+      f.tabs.splice(0, f.tabs.length, ...tabs);
+    },
+    setActive(tabId: number) {
+      const target = f.tabs.find((t) => t.id === tabId);
+      if (!target) throw new Error(`setActive: no tab with id ${tabId}`);
+      for (const t of f.tabs) if (t.windowId === target.windowId) t.active = false;
+      target.active = true;
+    },
+    removeTab(tabId: number) {
+      const i = f.tabs.findIndex((t) => t.id === tabId);
+      if (i >= 0) f.tabs.splice(i, 1);
+    },
   };
 
   // Every scripted method funnels through here: count, maybe throw, maybe reject.
@@ -83,15 +132,29 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
         if (!t) throw noTab(id);
         return t;
       }),
-      discard: wrap('tabs.discard', (id: number) => {
-        const t = find(id);
-        if (!t) throw noTab(id);
-        if (f.discardBehaviour === 'reject') throw new Error('Tabs cannot be discarded while active');
-        if (f.discardBehaviour === 'silent-noop') return undefined;
-        const newId = f.nextDiscardId ?? f.nextId++;
-        const replacement: FakeTab = { ...t, id: newId, discarded: true, status: 'unloaded' };
-        f.tabs.splice(f.tabs.indexOf(t), 1, replacement);
-        return replacement;
+      // Async so a test can script what happens *during* a request, and so overlapping
+      // requests are observable through maxConcurrentDiscards.
+      discard: wrap('tabs.discard', async (id: number) => {
+        const n = f.counts['tabs.discard'] ?? 0; // wrap already counted this call
+        f.inFlightDiscards++;
+        f.maxConcurrentDiscards = Math.max(f.maxConcurrentDiscards, f.inFlightDiscards);
+        try {
+          await f.onBeforeDiscard?.(id, n);
+          const t = find(id);
+          if (!t) throw noTab(id);
+          if (f.discardBehaviour === 'reject') throw new Error('Tabs cannot be discarded while active');
+          if (f.discardBehaviour === 'silent-noop') {
+            await f.onAfterDiscard?.(id, n);
+            return undefined;
+          }
+          const newId = f.nextDiscardId ?? f.nextId++;
+          const replacement: FakeTab = { ...t, id: newId, discarded: true, status: 'unloaded' };
+          f.tabs.splice(f.tabs.indexOf(t), 1, replacement);
+          await f.onAfterDiscard?.(id, n);
+          return replacement;
+        } finally {
+          f.inFlightDiscards--;
+        }
       }),
       create: wrap('tabs.create', (p: chrome.tabs.CreateProperties) => {
         const t: FakeTab = { id: f.nextId++, url: p.url, windowId: 1, index: f.tabs.length };

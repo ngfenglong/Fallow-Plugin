@@ -130,7 +130,10 @@ describe('inventory: unsupported and odd URLs', () => {
 });
 
 describe('inventory: structure and order (A01)', () => {
-  it('preserves window, group and tab order without rearranging anything', async () => {
+  // Ordering is imposed, not inherited: windows go by ascending id whatever order the
+  // window query returned them in, and rows by (windowId, index). Within a window, a group
+  // takes the place of its first tab and keeps its tabs in position order.
+  it('orders windows by id and rows by window and position, keeping each group together', async () => {
     fake.windows.splice(0, fake.windows.length, { id: 30 }, { id: 10, focused: true }, { id: 20 });
     fake.groups.push(group(7, 10), group(5, 10));
     await seed([
