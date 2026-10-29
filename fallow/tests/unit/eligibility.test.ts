@@ -3,7 +3,7 @@ import type { EligibilityInput, EligibilityMode } from '../../src/domain/eligibi
 import { DEFAULT_SETTINGS } from '../../src/domain/settings';
 import { REASON_CODES, type ReasonCode } from '../../src/domain/reason-codes';
 import type { TabActivity, TabFacts } from '../../src/domain/types';
-import { MANUAL_BULK_FLOOR_MS } from '../../src/domain/constants';
+import { MANUAL_BULK_FLOOR_MS, THRESHOLD_MIN } from '../../src/domain/constants';
 
 const MODES: EligibilityMode[] = ['auto', 'manual-bulk', 'manual-single'];
 
@@ -107,6 +107,22 @@ describe('decide: threshold, floor, grace and dashboard origin by mode', () => {
     expect(decide(input({ ...over, mode: 'auto' })).reasons).toContain('NOT_OLD_ENOUGH');
   });
 
+  it('gives exactly one reason per mode at 30s idle: auto NOT_OLD_ENOUGH only, bulk USED_RECENTLY only', () => {
+    const activity = { tabId: 1, backgroundSince: 3_600_000 - 30_000, protectedForSession: false };
+    expect(decide(input({ activity, mode: 'auto' })).reasons).toEqual(['NOT_OLD_ENOUGH']);
+    expect(decide(input({ activity, mode: 'manual-bulk' })).reasons).toEqual(['USED_RECENTLY']);
+    expect(decide(input({ activity, mode: 'manual-single' })).eligible).toBe(true);
+  });
+
+  it('makes auto eligible at the threshold minimum exactly equal to the floor', () => {
+    // THRESHOLD_MIN minutes must equal MANUAL_BULK_FLOOR_MS, so under auto the threshold
+    // already implies the floor. A change to either constant breaks this loudly.
+    expect(THRESHOLD_MIN * 60_000).toBe(MANUAL_BULK_FLOOR_MS);
+    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: THRESHOLD_MIN };
+    const activity = { tabId: 1, backgroundSince: 3_600_000 - 60_000, protectedForSession: false };
+    expect(decide(input({ settings, activity, mode: 'auto' })).eligible).toBe(true);
+  });
+
   it.each([[59_999, false], [60_000, true]])('treats %pms idle as eligible=%p for bulk', (idle, ok) => {
     const activity = { tabId: 1, backgroundSince: 3_600_000 - idle, protectedForSession: false };
     expect(decide(input({ activity, mode: 'manual-bulk' })).eligible).toBe(ok);
@@ -157,10 +173,10 @@ describe('backgroundElapsedMs and the backward clock (Review Focus 2)', () => {
     expect(backgroundElapsedMs({ tabId: 1, backgroundSince: 5_000, protectedForSession: false }, 1_000)).toBe(0);
   });
 
-  it('reads a backward clock jump as just used, never as idle in the future', () => {
+  it('never reads a backward clock jump as idle in the future', () => {
     const d = decide(input({ activity: { tabId: 1, backgroundSince: 7_200_000, protectedForSession: false } }));
-    expect(d.reasons).toContain('USED_RECENTLY');
     expect(d.reasons).toContain('NOT_OLD_ENOUGH');
+    expect(d.reasons).not.toContain('USED_RECENTLY');
     expect(d.eligible).toBe(false);
   });
 

@@ -60,7 +60,10 @@ export function decide(input: EligibilityInput): Decision {
   if (mode === 'manual-bulk' && dashboardOriginTabIds.includes(tab.tabId)) reasons.push('DASHBOARD_ORIGIN');
 
   const elapsed = backgroundElapsedMs(activity, now);
-  if (mode !== 'manual-single' && elapsed < MANUAL_BULK_FLOOR_MS) reasons.push('USED_RECENTLY');
+  // The floor replaces the threshold's protection in the one mode that ignores it. Under
+  // auto the threshold is >= THRESHOLD_MIN, which equals this floor, so the floor could
+  // only ever add a redundant second reason there; it is therefore bulk-only.
+  if (mode === 'manual-bulk' && elapsed < MANUAL_BULK_FLOOR_MS) reasons.push('USED_RECENTLY');
   if (mode === 'auto' && elapsed < settings.inactivityMinutes * 60_000) reasons.push('NOT_OLD_ENOUGH');
 
   // Grace stops an automatic cascade only; a manual action is the owner asking directly.
