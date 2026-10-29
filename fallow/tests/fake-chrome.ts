@@ -21,6 +21,8 @@ export type FakeChrome = {
   forbidden: { remove: number; move: number };
   /** property bag of every tabs.update call */
   updateCalls: Array<Record<string, unknown>>;
+  /** arguments of every windows.update call */
+  windowUpdateCalls: Array<{ windowId: number; props: Record<string, unknown> }>;
   nextId: number;
 };
 
@@ -40,6 +42,7 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
     counts: {},
     forbidden: { remove: 0, move: 0 },
     updateCalls: [],
+    windowUpdateCalls: [],
     nextId: 1000,
   };
 
@@ -106,7 +109,9 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
     },
     windows: {
       getAll: wrap('windows.getAll', () => f.windows),
-      update: wrap('windows.update', (_id: number, _p: chrome.windows.UpdateInfo) => undefined),
+      update: wrap('windows.update', (windowId: number, props: chrome.windows.UpdateInfo) => {
+        f.windowUpdateCalls.push({ windowId, props: { ...props } });
+      }),
     },
     tabGroups: {
       query: wrap('tabGroups.query', () => f.groups),

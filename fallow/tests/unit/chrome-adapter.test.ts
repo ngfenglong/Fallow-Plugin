@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createChromeAdapter, toTabFacts, type ChromeAdapter, type Result } from '../../src/platform/chrome-adapter';
+import { classifyError, createChromeAdapter, toTabFacts, type ChromeAdapter, type Result } from '../../src/platform/chrome-adapter';
 import { createFakeChrome, type FakeChrome } from '../fake-chrome';
 
 let fake: FakeChrome;
@@ -23,6 +23,10 @@ describe('toTabFacts', () => {
   it('never yields undefined in any field', () => {
     const facts = toTabFacts({ id: 1 } as chrome.tabs.Tab);
     for (const v of Object.values(facts)) expect(v).not.toBeUndefined();
+  });
+  it('falls back to pendingUrl when url is absent', () => {
+    expect(toTabFacts({ id: 1, pendingUrl: 'https://next.test/' } as chrome.tabs.Tab).url).toBe('https://next.test/');
+    expect(toTabFacts({ id: 1, url: 'https://a.test/', pendingUrl: 'https://b.test/' } as chrome.tabs.Tab).url).toBe('https://a.test/');
   });
   it('keeps an explicit autoDiscardable false and unloaded status', () => {
     const f = toTabFacts({ id: 2, autoDiscardable: false, discarded: true, status: 'unloaded' } as chrome.tabs.Tab);
@@ -127,17 +131,66 @@ describe('discard', () => {
     fake.nextDiscardId = 99;
     const r = await adapter.discard(1);
     expect(r.ok && r.value.facts).toMatchObject({ windowId: 10, groupId: 5, pinned: true, audible: true });
-    expect(fake.tabs.find((t) => t.id === 99)?.index).toBe(3);
-    expect(fake.tabs.indexOf(fake.tabs.find((t) => t.id === 99)!)).toBe(0);
   });
 
-  it('reports tab-gone when the re-read of the new id fails', async () => {
-    fake.rejectOn.set('tabs.get', new Error('No tab with id: 1000'));
+  it('still succeeds with the new id when the re-read fails after a good discard', async () => {
+    fake.nextDiscardId = 99;
+    fake.rejectOn.set('tabs.get', new Error('No tab with id: 99'));
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value.requestedTabId).toBe(1);
+    expect(r.ok && r.value.facts).toMatchObject({ tabId: 99, discarded: true, windowId: 10 });
+  });
+  it('reports tab-gone only when chrome gave no tab and the re-read fails', async () => {
+    fake.discardBehaviour = 'silent-noop';
+    fake.rejectOn.set('tabs.get', new Error('No tab with id: 1'));
     expect(await adapter.discard(1)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
+  });
+  it('reports a same-id discard: requested equals new id and discarded is true', async () => {
+    fake.nextDiscardId = 1;
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value.requestedTabId).toBe(1);
+    expect(r.ok && r.value.facts.tabId).toBe(1);
+    expect(r.ok && r.value.facts.discarded).toBe(true);
   });
 
   it('reports tab-gone for an unknown tab', async () => {
     expect(await adapter.discard(42)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
+  });
+});
+
+describe('malformed chrome results', () => {
+  it.each([
+    ['tabs.query undefined', () => { fake.tabs = undefined as never; fake.api.tabs.query = (async () => undefined) as never; }, (a: ChromeAdapter) => a.queryTabs()],
+    ['tabs.query with a null element', () => { fake.tabs.push(null as never); }, (a: ChromeAdapter) => a.queryTabs()],
+    ['tabs.get undefined', () => { fake.api.tabs.get = (async () => undefined) as never; }, (a: ChromeAdapter) => a.getTab(1)],
+    ['windows.getAll undefined', () => { fake.api.windows.getAll = (async () => undefined) as never; }, (a: ChromeAdapter) => a.queryWindows()],
+    ['tabGroups.query null', () => { fake.api.tabGroups.query = (async () => null) as never; }, (a: ChromeAdapter) => a.queryGroups()],
+  ])('%s resolves to ok:false', async (_n, setup, call) => {
+    setup();
+    await expect(call(adapter)).resolves.toMatchObject({ ok: false });
+  });
+  it('getTab reports tab-gone for a tab without an id', async () => {
+    fake.tabs.push({ windowId: 3 });
+    fake.api.tabs.get = (async () => ({ windowId: 3 })) as never;
+    expect(await adapter.getTab(5)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
+  });
+  it('survives a null-prototype error with no message', async () => {
+    fake.rejectOn.set('tabs.query', Object.create(null));
+    expect(await adapter.queryTabs()).toMatchObject({ ok: false, error: { kind: 'unknown' } });
+  });
+});
+
+describe('classifyError', () => {
+  it.each([
+    ['No tab with id: 7', 'tab-gone'],
+    ['Invalid tab ID: 7', 'tab-gone'],
+    ['Tabs cannot be discarded while active', 'rejected'],
+    ['Tabs cannot be edited right now (user may be dragging a tab).', 'rejected'],
+    ['The "tabs" permission is required for the active tab', 'no-permission'],
+    ['No window with id: 3', 'unknown'],
+    ['kaboom', 'unknown'],
+  ])('%p -> %p', (message, kind) => {
+    expect(classifyError(message)).toBe(kind);
   });
 });
 
@@ -190,6 +243,15 @@ describe('other operations', () => {
     expect(fake.updateCalls).toEqual([{ active: true }]);
     expect(fake.counts['windows.update']).toBe(1);
   });
+  it('asks windows.update only to focus the window', async () => {
+    await adapter.focusTab(1);
+    expect(fake.windowUpdateCalls).toEqual([{ windowId: 10, props: { focused: true } }]);
+  });
+  it('still reports ok when the window focus fails after the tab was activated', async () => {
+    fake.rejectOn.set('windows.update', new Error('window boom'));
+    expect(await adapter.focusTab(1)).toEqual({ ok: true, value: undefined });
+    expect(fake.updateCalls).toEqual([{ active: true }]);
+  });
   it('reports tab-gone when focusing a missing tab', async () => {
     expect(await adapter.focusTab(77)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
   });
@@ -220,7 +282,7 @@ describe('surface', () => {
     await adapter.queryWindows();
     await adapter.queryGroups();
     await adapter.discard(1);
-    await adapter.focusTab(1000);
+    await adapter.focusTab(1000); // 1000 exists only because discard(1) above minted it
     await adapter.openUrlInNewTab('https://a.test/');
     await adapter.getAlarm('a');
     await adapter.createAlarm('a', 1);

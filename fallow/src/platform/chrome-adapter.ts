@@ -24,10 +24,11 @@ export interface ChromeAdapter {
   clearAlarm(name: string): Promise<Result<void>>;
 }
 
+/** Exported for direct testing. Order matters: first match wins. */
 export function classifyError(message: string): AdapterError['kind'] {
   if (/no tab with id|No tab with id|Invalid tab ID/i.test(message)) return 'tab-gone';
-  if (/cannot be discarded|active tab/i.test(message)) return 'rejected';
   if (/permission/i.test(message)) return 'no-permission';
+  if (/cannot be discarded|active tab|cannot be edited|dragging a tab/i.test(message)) return 'rejected';
   return 'unknown';
 }
 
@@ -38,8 +39,12 @@ function fail(message: string): { ok: false; error: AdapterError } {
 function messageOf(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === 'string') return e;
-  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message);
-  return String(e);
+  try {
+    if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message);
+    return String(e);
+  } catch {
+    return 'Unknown error';
+  }
 }
 
 const STATUSES = ['loading', 'complete', 'unloaded'] as const;
@@ -50,7 +55,7 @@ export function toTabFacts(tab: chrome.tabs.Tab): TabFacts {
     tabId: tab.id ?? -1,
     windowId: tab.windowId ?? -1,
     groupId: tab.groupId ?? -1,
-    url: tab.url ?? '',
+    url: tab.url ?? tab.pendingUrl ?? '',
     title: tab.title ?? '',
     active: tab.active ?? false,
     audible: tab.audible ?? false,
@@ -74,37 +79,36 @@ export function createChromeAdapter(api: typeof chrome): ChromeAdapter {
     }
   }
 
-  const getTab = async (tabId: number): Promise<Result<TabFacts>> => {
-    const r = await guard(() => api.tabs.get(tabId));
-    return r.ok ? { ok: true, value: toTabFacts(r.value) } : r;
-  };
+  // Mapping runs inside guard so a null/undefined/odd result becomes { ok: false }, never a throw.
+  const getTab = (tabId: number): Promise<Result<TabFacts>> =>
+    guard(async () => {
+      const t = await api.tabs.get(tabId);
+      if (t.id === undefined) throw new Error(`No tab with id: ${tabId}`);
+      return toTabFacts(t);
+    });
 
   return {
-    async queryTabs() {
-      const r = await guard(() => api.tabs.query({}));
-      if (!r.ok) return r;
+    queryTabs() {
       // Tabs without an id cannot be acted on, so they are dropped. An inventory
       // built from this can therefore differ from the browser's own tab count.
-      return { ok: true, value: r.value.filter((t) => t.id !== undefined).map(toTabFacts) };
+      return guard(async () =>
+        (await api.tabs.query({})).filter((t) => t.id !== undefined).map(toTabFacts),
+      );
     },
     getTab,
-    async queryWindows() {
-      const r = await guard(() => api.windows.getAll());
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.filter((w) => w.id !== undefined).map((w) => ({ windowId: w.id as number, focused: w.focused ?? false })),
-      };
+    queryWindows() {
+      return guard(async () =>
+        (await api.windows.getAll())
+          .filter((w) => w.id !== undefined)
+          .map((w) => ({ windowId: w.id as number, focused: w.focused ?? false })),
+      );
     },
-    async queryGroups() {
-      const r = await guard(() => api.tabGroups.query({}));
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.map((g) => ({
+    queryGroups() {
+      return guard(async () =>
+        (await api.tabGroups.query({})).map((g) => ({
           groupId: g.id, windowId: g.windowId, title: g.title ?? '', color: g.color, collapsed: g.collapsed,
         })),
-      };
+      );
     },
     async discard(tabId) {
       const d = await guard(() => api.tabs.discard(tabId));
@@ -113,16 +117,27 @@ export function createChromeAdapter(api: typeof chrome): ChromeAdapter {
       // the requested one; fall back only when Chrome resolved without a tab.
       const readId = d.value?.id ?? tabId;
       const r = await getTab(readId);
-      if (!r.ok) return r;
-      return { ok: true, value: { requestedTabId: tabId, facts: r.value } };
+      if (r.ok) return { ok: true, value: { requestedTabId: tabId, facts: r.value } };
+      // The discard succeeded and Chrome handed us the post-discard tab: use it
+      // rather than report a successful unload as a failure and lose the new id.
+      if (d.value) {
+        const facts = toTabFacts(d.value);
+        if (d.value.id === undefined) facts.tabId = tabId;
+        return { ok: true, value: { requestedTabId: tabId, facts } };
+      }
+      return r;
     },
     async focusTab(tabId) {
       // Activation only: tabs.update is called with { active: true } and never a url.
-      return guard(async () => {
-        const tab = await api.tabs.update(tabId, { active: true });
-        const windowId = tab?.windowId;
-        if (windowId !== undefined) await api.windows.update(windowId, { focused: true });
-      });
+      const t = await guard(() => api.tabs.update(tabId, { active: true }));
+      if (!t.ok) return t;
+      // Window focus is best-effort: the tab is already active, so a failure
+      // here must not be reported as a failed focus.
+      const windowId = t.value?.windowId;
+      if (windowId !== undefined) {
+        await guard(() => api.windows.update(windowId, { focused: true }));
+      }
+      return { ok: true, value: undefined };
     },
     async openUrlInNewTab(url) {
       const r = await guard(() => api.tabs.create({ url }));
