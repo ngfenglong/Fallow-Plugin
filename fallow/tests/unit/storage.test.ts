@@ -443,14 +443,69 @@ describe('createChromeStorageArea', () => {
     await expect(createChromeStorageArea(area).get(KEYS.history)).rejects.toThrow('chrome get failed');
   });
 
-  it('set resolves when Chrome rejects the write', async () => {
+  it('set rejects when Chrome rejects the write, so a refused settings write is never reported as saved', async () => {
     const { area } = fakeChromeArea({ __failSet: true });
-    await expect(createChromeStorageArea(area).set(KEYS.history, [])).resolves.toBeUndefined();
+    await expect(createChromeStorageArea(area).set(KEYS.history, [])).rejects.toThrow('chrome set failed');
   });
 
-  it('set resolves when the area throws synchronously', async () => {
+  it('set rejects when the area throws synchronously', async () => {
     const throwing = { get: async () => ({}), set: () => { throw new Error('sync'); } };
     const storage = createChromeStorageArea(throwing as unknown as chrome.storage.StorageArea);
-    await expect(storage.set(KEYS.history, [])).resolves.toBeUndefined();
+    await expect(storage.set(KEYS.history, [])).rejects.toThrow('sync');
+  });
+});
+
+describe('write failure policy', () => {
+  // A chrome-backed repository set whose Chrome writes can be refused on demand.
+  function chromeBackedRepos() {
+    const store: Record<string, unknown> = {};
+    const flags = { failSet: false };
+    const area = {
+      get: async (key: string) => (key in store ? { [key]: store[key] } : {}),
+      set: async (items: Record<string, unknown>) => {
+        if (flags.failSet) throw new Error('chrome set refused');
+        Object.assign(store, items);
+      },
+    } as unknown as chrome.storage.StorageArea;
+    const bridge = createChromeStorageArea(area);
+    return { store, flags, repos: createRepos({ local: bridge, session: bridge }) };
+  }
+
+  it('settings.write rejects when Chrome refuses the write', async () => {
+    const { flags, repos } = chromeBackedRepos();
+    flags.failSet = true;
+    await expect(repos.settings.write({ ...DEFAULT_SETTINGS, inactivityMinutes: 30 })).rejects.toThrow('chrome set refused');
+  });
+
+  it('settings.write resolves and stores the value when Chrome accepts it', async () => {
+    const { repos } = chromeBackedRepos();
+    await expect(repos.settings.write({ ...DEFAULT_SETTINGS, inactivityMinutes: 30 })).resolves.toBeUndefined();
+    await expect(repos.settings.read()).resolves.toMatchObject({ inactivityMinutes: 30 });
+  });
+
+  it('history.append resolves and keeps prior rows when Chrome refuses the write', async () => {
+    const { flags, repos } = chromeBackedRepos();
+    await repos.history.append([entry({ at: 1 })], 2);
+    flags.failSet = true;
+    await expect(repos.history.append([entry({ at: 3 })], 4)).resolves.toBeUndefined();
+    flags.failSet = false;
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([1]);
+  });
+
+  it('history.clear resolves when Chrome refuses the write', async () => {
+    const { flags, repos } = chromeBackedRepos();
+    flags.failSet = true;
+    await expect(repos.history.clear()).resolves.toBeUndefined();
+  });
+
+  it('activity.writeAll rejects when the session write is refused', async () => {
+    fake.session.rejectOn.set(`set:${KEYS.activity}`, new Error('quota exceeded'));
+    await expect(repos.activity.writeAll({ 1: { tabId: 1, backgroundSince: null, protectedForSession: false } }))
+      .rejects.toThrow('quota exceeded');
+  });
+
+  it('session.write rejects when the session write is refused', async () => {
+    fake.session.throwOn.set(`set:${KEYS.session}`, new Error('quota exceeded'));
+    await expect(repos.session.write({ discoveredAt: 1, graceUntil: null })).rejects.toThrow('quota exceeded');
   });
 });

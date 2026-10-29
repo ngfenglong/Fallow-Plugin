@@ -246,11 +246,12 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
   return { settings, activity, session: sessionRepo, history };
 }
 
-// Bridges a real chrome.storage area to StorageArea. get rejects when Chrome cannot
-// read, so the caller can tell "absent" (undefined) from "could not read" and never
-// overwrite stored data it could not see. set resolves on failure, because every write
-// through the repositories is lossy by design. Note: chrome.storage.session has a
-// smaller quota than local, and session activity records are its main consumer.
+// Bridges a real chrome.storage area to StorageArea. Both methods reject when Chrome
+// fails, so the repository decides the policy: settings and session records propagate
+// the failure to the caller, while history swallows it because it is lossy telemetry.
+// get rejects, so "absent" (undefined) is never confused with "could not read".
+// Note: chrome.storage.session has a smaller quota than local, and session activity
+// records are its main consumer.
 export function createChromeStorageArea(area: chrome.storage.StorageArea): StorageArea {
   return {
     async get(key) {
@@ -258,11 +259,7 @@ export function createChromeStorageArea(area: chrome.storage.StorageArea): Stora
       return items?.[key];
     },
     async set(key, value) {
-      try {
-        await area.set({ [key]: value });
-      } catch {
-        // Lossy by design: the caller is not told, and the stored value is unchanged.
-      }
+      await area.set({ [key]: value });
     },
   };
 }
