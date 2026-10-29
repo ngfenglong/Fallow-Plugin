@@ -72,7 +72,8 @@ export function createTracker(deps: { adapter: ChromeAdapter; activity: Activity
         const q = await adapter.queryTabs();
         if (q.ok) {
           for (const tab of q.value) {
-            if (tab.windowId !== windowId || tab.tabId === tabId) continue;
+            // A tab the query reports as selected is not idle, whatever the event said.
+            if (tab.windowId !== windowId || tab.tabId === tabId || tab.active) continue;
             const rec = map[tab.tabId];
             if (!rec) map[tab.tabId] = { tabId: tab.tabId, backgroundSince: now, protectedForSession: false };
             else if (rec.backgroundSince === null) rec.backgroundSince = now;
@@ -84,6 +85,8 @@ export function createTracker(deps: { adapter: ChromeAdapter; activity: Activity
       });
     },
 
+    // Relies on Chrome also firing onActivated for a newly selected tab, which is what
+    // starts the previous tab's timer; this only records the created tab itself.
     onCreated(tab, now) {
       return update((map) => {
         const old = map[tab.tabId];
@@ -122,6 +125,8 @@ export function createTracker(deps: { adapter: ChromeAdapter; activity: Activity
       });
     },
 
+    // For an unknown tab the null backgroundSince is deliberate (no timing information
+    // yet); the next reconcile assigns a real value or drops the record.
     setTabProtection(tabId, isProtected) {
       return update((map) => {
         const old = map[tabId];

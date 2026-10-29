@@ -81,9 +81,10 @@ describe('tracker: brief behaviours', () => {
   });
   it('forgets a removed tab and does not resurrect it', async () => {
     await tracker.reconcile([facts({ tabId: 1 })], 1_000);
+    await tracker.reconcile([facts({ tabId: 2 })], 1_500);
     await tracker.onRemoved(1);
-    await tracker.reconcile([], 2_000);
-    expect(await tracker.snapshot()).toEqual({});
+    await tracker.reconcile([facts({ tabId: 2 })], 2_000);
+    expect(Object.keys(await tracker.snapshot())).toEqual(['2']);
   });
   it('drops records for tabs that no longer exist at reconcile', async () => {
     await tracker.reconcile([facts({ tabId: 1 }), facts({ tabId: 2 })], 1_000);
@@ -238,5 +239,35 @@ describe('tracker: beyond the brief', () => {
     await expect(tracker.onActivated(1, 10, 1_000)).resolves.toBeUndefined();
     await expect(tracker.onReplaced(2, 1, 1_000)).resolves.toBeUndefined();
     await expect(tracker.onCreated(facts({ tabId: 3 }), 1_000)).resolves.toBeUndefined();
+  });
+  it('a failing activity read rejects, writes nothing and leaves the stored map untouched', async () => {
+    await tracker.reconcile([facts({ tabId: 1 }), facts({ tabId: 2 })], 1_000);
+    const before = structuredClone(stored());
+    storage.session.writes = 0;
+    storage.session.rejectOn.set('get:fallow.activity', new Error('unavailable'));
+    await expect(tracker.onCreated(facts({ tabId: 3 }), 2_000)).rejects.toThrow('unavailable');
+    await expect(tracker.reconcile([facts({ tabId: 3 })], 2_000)).rejects.toThrow('unavailable');
+    storage.session.rejectOn.clear();
+    expect(storage.session.writes).toBe(0);
+    expect(stored()).toEqual(before);
+  });
+  it('onActivated gives no timer to any tab the query reports as selected', async () => {
+    // The re-read lands after a further selection change: tab 3 is now the selected one.
+    seedFake([{ id: 1, windowId: 10 }, { id: 2, windowId: 10 }, { id: 3, windowId: 10, active: true }]);
+    await tracker.reconcile([facts({ tabId: 1 }), facts({ tabId: 2, active: true }), facts({ tabId: 3, active: true })], 1_000);
+    await tracker.onActivated(2, 10, 9_000);
+    const s = await tracker.snapshot();
+    expect([s[1]!.backgroundSince, s[2]!.backgroundSince, s[3]!.backgroundSince]).toEqual([1_000, null, null]);
+  });
+  it('onActivated rewrites a future timestamp on a tab it re-reads', async () => {
+    storage.session.data.set('fallow.activity', { 1: { tabId: 1, backgroundSince: 50_000, protectedForSession: false } });
+    seedFake([{ id: 1, windowId: 10 }, { id: 2, windowId: 10, active: true }]);
+    await tracker.onActivated(2, 10, 10_000);
+    expect((await tracker.snapshot())[1]!.backgroundSince).toBe(10_000);
+  });
+  it('onReplaced rewrites a future timestamp it migrates', async () => {
+    storage.session.data.set('fallow.activity', { 1: { tabId: 1, backgroundSince: 50_000, protectedForSession: false } });
+    await tracker.onReplaced(9, 1, 10_000);
+    expect((await tracker.snapshot())[9]!.backgroundSince).toBe(10_000);
   });
 });

@@ -180,12 +180,10 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
 
   const activity: ActivityRepo = {
     async readAll() {
-      let raw: unknown;
-      try {
-        raw = await session.get(KEYS.activity);
-      } catch {
-        raw = undefined;
-      }
+      // A failed get propagates. Returning {} would make "could not read" look like
+      // "no records", and the caller's next write would erase every other timer.
+      // Absent or malformed stored data still yields {}.
+      const raw = await session.get(KEYS.activity);
       return sanitizeActivity(raw);
     },
     async writeAll(map) {

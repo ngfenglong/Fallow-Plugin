@@ -199,9 +199,14 @@ describe('ActivityRepo', () => {
     await expect(repos.activity.readAll()).resolves.toEqual(map);
   });
 
-  it('resolves to an empty map when the storage get throws', async () => {
+  it('rejects when the storage get throws, so a failed read is not mistaken for no records', async () => {
     fake.session.throwOn.set(KEYS.activity, new Error('boom'));
-    await expect(repos.activity.readAll()).resolves.toEqual({});
+    await expect(repos.activity.readAll()).rejects.toThrow('boom');
+  });
+
+  it('rejects when the storage get rejects', async () => {
+    fake.session.rejectOn.set(`get:${KEYS.activity}`, new Error('unavailable'));
+    await expect(repos.activity.readAll()).rejects.toThrow('unavailable');
   });
 });
 
