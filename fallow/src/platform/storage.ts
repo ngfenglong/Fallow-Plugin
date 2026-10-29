@@ -2,7 +2,8 @@
 // value: corruption yields the documented empty value, never a throw, so a worker
 // initialisation cannot be killed by bad data. Settings are only ever returned after
 // parseSettings, which later components rely on as a precondition.
-import { DEFAULT_SETTINGS, parseSettings } from '../domain/settings';
+import { parseSettings } from '../domain/settings';
+import { normalizeHostname } from '../domain/hostname';
 import { HISTORY_MAX_AGE_MS, HISTORY_MAX_ENTRIES } from '../domain/constants';
 import { REASON_CODES, type ReasonCode } from '../domain/reason-codes';
 import type { Settings, TabActivity, Trigger, UnloadOutcome } from '../domain/types';
@@ -108,8 +109,14 @@ function parseSession(raw: unknown): SessionState | null {
   }
 }
 
+// An operation id is an opaque token. Anything containing a URL delimiter or whitespace
+// is not one, so a row carrying one is dropped rather than persisted.
+const OPERATION_ID = /^[^/?#\s]{1,128}$/;
+
 // Builds a fresh row from known fields only, so nothing outside the schema is ever
-// stored. An invalid row yields undefined and is dropped on its own.
+// stored. An invalid row yields undefined and is dropped on its own. A hostname is
+// stored only in normalised form: anything normalizeHostname rejects, such as a URL,
+// becomes null while the row is kept.
 function parseHistoryRow(raw: unknown): HistoryEntry | undefined {
   try {
     if (!isPlainObject(raw)) return undefined;
@@ -117,12 +124,14 @@ function parseHistoryRow(raw: unknown): HistoryEntry | undefined {
     const operationId = own(raw, 'operationId');
     const trigger = own(raw, 'trigger');
     const sessionTabId = own(raw, 'sessionTabId');
-    const hostname = own(raw, 'hostname');
+    const rawHostname = own(raw, 'hostname');
     const outcome = own(raw, 'outcome');
     const reason = own(raw, 'reason');
-    if (!isFiniteNumber(at) || typeof operationId !== 'string') return undefined;
+    if (!isFiniteNumber(at) || typeof operationId !== 'string' || !OPERATION_ID.test(operationId)) return undefined;
     if (!isOneOf(TRIGGERS, trigger) || !isOneOf(OUTCOMES, outcome)) return undefined;
-    if (!isFiniteNumber(sessionTabId) || !(hostname === null || typeof hostname === 'string')) return undefined;
+    if (!isFiniteNumber(sessionTabId)) return undefined;
+    if (!(rawHostname === null || typeof rawHostname === 'string')) return undefined;
+    const hostname = rawHostname === null ? null : normalizeHostname(rawHostname);
     if (reason !== undefined && !isOneOf(REASON_CODES, reason)) return undefined;
     const row: HistoryEntry = { at, operationId, trigger, sessionTabId, hostname, outcome };
     if (reason !== undefined) row.reason = reason;
@@ -140,7 +149,8 @@ function parseHistory(raw: unknown): HistoryEntry[] {
       const row = parseHistoryRow(item);
       if (row) rows.push(row);
     }
-    return rows.slice(0, HISTORY_MAX_ENTRIES);
+    // Newest first, whatever order the stored array is in.
+    return rows.sort((a, b) => b.at - a.at).slice(0, HISTORY_MAX_ENTRIES);
   } catch {
     return [];
   }
@@ -194,8 +204,21 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
       return parseSession(raw);
     },
     async write(s) {
-      await session.set(KEYS.session, { discoveredAt: s.discoveredAt, graceUntil: s.graceUntil });
+      // Validated like the read path, so a non-finite value is refused rather than stored.
+      const clean = parseSession(s);
+      if (clean === null) throw new TypeError('session state must have a finite discoveredAt and a null or finite graceUntil');
+      await session.set(KEYS.session, clean);
     },
+  };
+
+  // Every history mutation runs after the previous one settles. Without this, two
+  // overlapping read-modify-write cycles could each start from the same stored array
+  // and the later write would drop the earlier batch.
+  let tail: Promise<void> = Promise.resolve();
+  const serialise = (work: () => Promise<void>): Promise<void> => {
+    const run = tail.then(work);
+    tail = run.then(() => undefined, () => undefined);
+    return run;
   };
 
   const history: HistoryRepo = {
@@ -205,25 +228,7 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
     // tab operation that triggered it. A failed read skips the write entirely, so
     // existing history is never overwritten with only the new batch.
     async append(entries, now) {
-      let kept: HistoryEntry[];
-      try {
-        if (entries.length === 0) return;
-        const existing = parseHistory(await local.get(KEYS.history));
-        const incoming = entries.map(parseHistoryRow).filter((row): row is HistoryEntry => row !== undefined);
-        // A non-finite now skips the age trim only; the count cap still applies.
-        const cutoff = Number.isFinite(now) ? now - HISTORY_MAX_AGE_MS : Number.NEGATIVE_INFINITY;
-        kept = [...incoming, ...existing]
-          .filter((row) => row.at >= cutoff)
-          .sort((a, b) => b.at - a.at)
-          .slice(0, HISTORY_MAX_ENTRIES);
-      } catch {
-        return;
-      }
-      try {
-        await local.set(KEYS.history, kept);
-      } catch {
-        // Dropping one batch is acceptable; the existing log is untouched.
-      }
+      await serialise(() => appendOnce(entries, now));
     },
     async read() {
       let raw: unknown;
@@ -235,13 +240,38 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
       return parseHistory(raw);
     },
     async clear() {
-      try {
-        await local.set(KEYS.history, []);
-      } catch {
-        // Never throws into the caller, for the same reason as append.
-      }
+      await serialise(async () => {
+        try {
+          await local.set(KEYS.history, []);
+        } catch {
+          // Never throws into the caller, for the same reason as append.
+        }
+      });
     },
   };
+
+  // One read and one write, both inside the chain. Never rejects; see append.
+  async function appendOnce(entries: readonly HistoryEntry[], now: number): Promise<void> {
+    let kept: HistoryEntry[];
+    try {
+      if (entries.length === 0) return;
+      const existing = parseHistory(await local.get(KEYS.history));
+      const incoming = entries.map(parseHistoryRow).filter((row): row is HistoryEntry => row !== undefined);
+      // A non-finite now skips the age trim only; the count cap still applies.
+      const cutoff = Number.isFinite(now) ? now - HISTORY_MAX_AGE_MS : Number.NEGATIVE_INFINITY;
+      kept = [...incoming, ...existing]
+        .filter((row) => row.at >= cutoff)
+        .sort((a, b) => b.at - a.at)
+        .slice(0, HISTORY_MAX_ENTRIES);
+    } catch {
+      return;
+    }
+    try {
+      await local.set(KEYS.history, kept);
+    } catch {
+      // Dropping one batch is acceptable; the existing log is untouched.
+    }
+  }
 
   return { settings, activity, session: sessionRepo, history };
 }

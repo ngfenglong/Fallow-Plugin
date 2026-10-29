@@ -252,20 +252,21 @@ describe('HistoryRepo', () => {
     expect(await repos.history.read()).toHaveLength(1);
   });
 
-  it('drops aged-out entries and count-trims in the same append', async () => {
+  it('applies the age cut before the count cap, whatever the input order', async () => {
+    // Stale rows come first in the input. Count-before-age would fill the cap with
+    // stale rows and leave only 100 fresh ones; age-before-count keeps all 200.
     const now = 10 * 24 * 60 * 60 * 1000;
-    const stale = Array.from({ length: 10 }, (_, i) => entry({ at: now - HISTORY_MAX_AGE_MS - 1 - i }));
-    const fresh = Array.from({ length: 510 }, (_, i) => entry({ at: now - 1000 - i }));
+    const stale = Array.from({ length: 400 }, (_, i) => entry({ at: now - HISTORY_MAX_AGE_MS - 1 - i }));
+    const fresh = Array.from({ length: 200 }, (_, i) => entry({ at: now - 1000 - i }));
     await repos.history.append([...stale, ...fresh], now);
     const rows = await repos.history.read();
-    expect(rows).toHaveLength(HISTORY_MAX_ENTRIES);
+    expect(rows).toHaveLength(200);
     expect(rows.every((r) => r.at >= now - HISTORY_MAX_AGE_MS)).toBe(true);
-    expect(rows[0]!.at).toBe(now - 1000);
   });
 
   it('never stores a page title or a full url', async () => {
-    await repos.history.append([entry({ hostname: 'example.com' })], 1);
-    const raw = JSON.stringify(fake.local.get(KEYS.history));
+    await repos.history.append([{ ...entry({ hostname: 'example.com' }), url: 'https://private.example/x' } as HistoryEntry], 1);
+    const raw = JSON.stringify(await fake.local.get(KEYS.history));
     expect(raw).not.toMatch(/https?:\/\//);
     expect(Object.keys((await repos.history.read())[0]!).sort())
       .toEqual(['at','hostname','operationId','outcome','sessionTabId','trigger']);
@@ -507,5 +508,99 @@ describe('write failure policy', () => {
   it('session.write rejects when the session write is refused', async () => {
     fake.session.throwOn.set(`set:${KEYS.session}`, new Error('quota exceeded'));
     await expect(repos.session.write({ discoveredAt: 1, graceUntil: null })).rejects.toThrow('quota exceeded');
+  });
+});
+
+describe('boundary, validation, ordering and concurrency', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  // A proxy that revokes itself the moment it is read as a thenable. Promise.resolve in
+  // the fake reads `then` first, so a plain pre-revoked proxy would fail inside get() and
+  // never reach the parser. This one passes the promise step and is revoked by the time
+  // the parser calls Array.isArray on it, so it exercises the parse path itself.
+  const revokedProxy = (): object => {
+    const handle: { proxy: object; revoke: () => void } = Proxy.revocable({}, {
+      get: (_target, key) => {
+        if (key === 'then') handle.revoke();
+        return undefined;
+      },
+    });
+    return handle.proxy;
+  };
+
+  it('keeps a row at exactly the age cutoff and drops one a millisecond older', async () => {
+    const now = 10 * DAY;
+    await repos.history.append([
+      entry({ at: now - HISTORY_MAX_AGE_MS }),
+      entry({ at: now - HISTORY_MAX_AGE_MS - 1 }),
+    ], now);
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([now - HISTORY_MAX_AGE_MS]);
+  });
+
+  it('a hostname carrying a URL drops to null and keeps the row', async () => {
+    fake.local.set(KEYS.history, [{ ...entry({ at: 1 }), hostname: 'https://bank.example/login?token=abc#x' }]);
+    const rows = await repos.history.read();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.hostname).toBeNull();
+  });
+
+  it('a smuggled URL in the hostname never reaches the persisted blob', async () => {
+    await repos.history.append([{ ...entry({ at: 1 }), hostname: 'https://bank.example/login?token=abc' }], 2);
+    const raw = JSON.stringify(await fake.local.get(KEYS.history));
+    expect(raw).not.toMatch(/https?:\/\//);
+    expect(raw).not.toContain('token=abc');
+  });
+
+  it('keeps a bracketed IPv6 hostname intact', async () => {
+    await repos.history.append([entry({ at: 1, hostname: '[::1]' })], 2);
+    expect((await repos.history.read())[0]!.hostname).toBe('[::1]');
+  });
+
+  it('drops a row whose operation id looks like a URL', async () => {
+    await repos.history.append([entry({ at: 1, operationId: 'https://bank.example/x' }), entry({ at: 2 })], 3);
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([2]);
+  });
+
+  it('two appends issued without awaiting between them both land', async () => {
+    const first = repos.history.append([entry({ at: 1 })], 2);
+    const second = repos.history.append([entry({ at: 3 })], 4);
+    await Promise.all([first, second]);
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([3, 1]);
+  });
+
+  it('a clear issued after an unawaited append is ordered after it', async () => {
+    const pending = repos.history.append([entry({ at: 1 })], 2);
+    const cleared = repos.history.clear();
+    await Promise.all([pending, cleared]);
+    await expect(repos.history.read()).resolves.toEqual([]);
+  });
+
+  it('session.write rejects a non-finite value and stores nothing', async () => {
+    await expect(repos.session.write({ discoveredAt: Number.NaN, graceUntil: null })).rejects.toThrow(TypeError);
+    await expect(repos.session.read()).resolves.toBeNull();
+  });
+
+  it('history.read returns newest first even when the stored array is out of order', async () => {
+    fake.local.set(KEYS.history, [entry({ at: 1 }), entry({ at: 3 }), entry({ at: 2 })]);
+    expect((await repos.history.read()).map((r) => r.at)).toEqual([3, 2, 1]);
+  });
+
+  it('settings.read survives a revoked proxy', async () => {
+    fake.local.set(KEYS.settings, revokedProxy());
+    await expect(repos.settings.read()).resolves.toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('activity.readAll survives a revoked proxy', async () => {
+    fake.session.set(KEYS.activity, revokedProxy());
+    await expect(repos.activity.readAll()).resolves.toEqual({});
+  });
+
+  it('session.read survives a revoked proxy', async () => {
+    fake.session.set(KEYS.session, revokedProxy());
+    await expect(repos.session.read()).resolves.toBeNull();
+  });
+
+  it('history.read survives a revoked proxy', async () => {
+    fake.local.set(KEYS.history, revokedProxy());
+    await expect(repos.history.read()).resolves.toEqual([]);
   });
 });
