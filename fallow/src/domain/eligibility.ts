@@ -6,7 +6,7 @@
 import type { Decision, LifecycleState, Settings, TabActivity, TabFacts } from './types';
 import type { ReasonCode } from './reason-codes';
 import { sortReasons } from './reason-codes';
-import { MANUAL_BULK_FLOOR_MS, THRESHOLD_MIN } from './constants';
+import { MANUAL_BULK_FLOOR_MS, THRESHOLD_MAX, THRESHOLD_MIN } from './constants';
 import { hostnameOf, matchesProtectedSite } from './hostname';
 
 export type EligibilityMode = 'auto' | 'manual-bulk' | 'manual-single';
@@ -99,13 +99,21 @@ export function decide(input: EligibilityInput): Decision {
   // auto the threshold is >= THRESHOLD_MIN, which equals this floor, so the floor could
   // only ever add a redundant second reason there; it is therefore bulk-only.
   if (floorApplies && !(elapsed >= MANUAL_BULK_FLOOR_MS)) reasons.push('USED_RECENTLY');
-  // Clamped to THRESHOLD_MIN: a zero, negative or non-finite threshold would otherwise
-  // make every tab instantly eligible under automation. parseSettings enforces the range
-  // too, but decide trusts its input.
-  const thresholdMinutes = Number.isFinite(settings.inactivityMinutes)
-    ? Math.max(THRESHOLD_MIN, settings.inactivityMinutes)
-    : THRESHOLD_MIN;
-  if (thresholdApplies && !(elapsed >= thresholdMinutes * 60_000)) reasons.push('NOT_OLD_ENOUGH');
+  // A finite threshold is clamped to [THRESHOLD_MIN, THRESHOLD_MAX]: a zero or negative
+  // value cannot make every tab instantly eligible, and an oversized one cannot make
+  // automation never run. A non-finite value (NaN, +/-Infinity) says nothing about what
+  // the owner wanted, so it holds rather than deriving a threshold from it.
+  if (thresholdApplies) {
+    if (!Number.isFinite(settings.inactivityMinutes)) {
+      reasons.push('NOT_OLD_ENOUGH');
+    } else {
+      const thresholdMinutes = Math.min(
+        THRESHOLD_MAX,
+        Math.max(THRESHOLD_MIN, settings.inactivityMinutes),
+      );
+      if (!(elapsed >= thresholdMinutes * 60_000)) reasons.push('NOT_OLD_ENOUGH');
+    }
+  }
 
   // Grace stops an automatic cascade only; a manual action is the owner asking directly.
   // Negated so a NaN clock holds the tab rather than letting the cascade through.

@@ -3,7 +3,7 @@ import type { EligibilityInput, EligibilityMode } from '../../src/domain/eligibi
 import { DEFAULT_SETTINGS } from '../../src/domain/settings';
 import { REASON_CODES, type ReasonCode } from '../../src/domain/reason-codes';
 import type { TabActivity, TabFacts } from '../../src/domain/types';
-import { MANUAL_BULK_FLOOR_MS, THRESHOLD_MIN } from '../../src/domain/constants';
+import { MANUAL_BULK_FLOOR_MS, THRESHOLD_MAX, THRESHOLD_MIN } from '../../src/domain/constants';
 
 const MODES: EligibilityMode[] = ['auto', 'manual-bulk', 'manual-single'];
 
@@ -349,19 +349,33 @@ describe('decide: fails closed on values it cannot interpret', () => {
   });
 });
 
-describe('decide: threshold clamp', () => {
-  const ONE_SECOND_IDLE = { tabId: 1, backgroundSince: 3_599_000, protectedForSession: false };
-  it.each([0, -5, NaN, -Infinity])('clamps inactivityMinutes %s to the minimum under auto', (minutes) => {
+describe('decide: inactivity threshold bounds', () => {
+  const MIN_MS = THRESHOLD_MIN * 60_000;
+  const MAX_MS = THRESHOLD_MAX * 60_000;
+  const idleFor = (ms: number) => ({ tabId: 1, backgroundSince: 3_600_000 - ms, protectedForSession: false });
+
+  it.each([+Infinity, -Infinity, NaN])('holds under auto when inactivityMinutes is %s, even after 25 hours idle', (minutes) => {
     const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: minutes };
-    const d = decide(input({ settings, activity: ONE_SECOND_IDLE, mode: 'auto' }));
+    const d = decide(input({ settings, activity: idleFor(25 * 60 * 60_000), mode: 'auto' }));
     expect(d.eligible).toBe(false);
-    expect(d.reasons).toContain('NOT_OLD_ENOUGH');
+    expect(d.reasons).toEqual(['NOT_OLD_ENOUGH']);
   });
 
-  it('still makes a tab eligible once it is idle for the clamped minimum', () => {
-    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: 0 };
-    const activity = { tabId: 1, backgroundSince: 3_600_000 - THRESHOLD_MIN * 60_000, protectedForSession: false };
-    expect(decide(input({ settings, activity, mode: 'auto' })).eligible).toBe(true);
+  it.each([0, -5])('clamps inactivityMinutes %s up to the minimum: held at 59s, eligible at 60s', (minutes) => {
+    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: minutes };
+    expect(decide(input({ settings, activity: idleFor(MIN_MS - 1_000), mode: 'auto' })).eligible).toBe(false);
+    expect(decide(input({ settings, activity: idleFor(MIN_MS), mode: 'auto' })).eligible).toBe(true);
+  });
+
+  it('clamps an oversized inactivityMinutes down to the maximum: held at 23h, eligible at 25h', () => {
+    const settings = { ...DEFAULT_SETTINGS, inactivityMinutes: 5_000 };
+    expect(decide(input({ settings, activity: idleFor(23 * 60 * 60_000), mode: 'auto' })).eligible).toBe(false);
+    expect(decide(input({ settings, activity: idleFor(25 * 60 * 60_000), mode: 'auto' })).eligible).toBe(true);
+    expect(MAX_MS).toBe(THRESHOLD_MAX * 60_000);
+  });
+
+  it('keeps the threshold minimum equal to the bulk floor, which the bulk-only floor ruling depends on', () => {
+    expect(THRESHOLD_MIN * 60_000).toBe(MANUAL_BULK_FLOOR_MS);
   });
 });
 
