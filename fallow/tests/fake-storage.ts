@@ -1,0 +1,51 @@
+// Scriptable test double for a chrome.storage area. Not a mock library: an in-memory
+// key/value store whose behaviour a test steers through plain fields. Values are
+// stored by reference, not cloned, so a test can plant hostile raw values (getters
+// that throw, prototype keys) exactly as a corrupt store might hold them.
+import type { StorageArea } from '../src/platform/storage';
+
+export type FakeArea = StorageArea & {
+  data: Map<string, unknown>;
+  /** number of set() calls, including seeding through set() */
+  writes: number;
+  /** number of get() calls */
+  gets: number;
+  /** key -> error thrown synchronously by get/set */
+  throwOn: Map<string, Error>;
+  /** key -> error the get/set promise rejects with */
+  rejectOn: Map<string, Error>;
+};
+
+export type FakeStorage = { local: FakeArea; session: FakeArea };
+
+function createArea(): FakeArea {
+  const area: FakeArea = {
+    data: new Map(),
+    writes: 0,
+    gets: 0,
+    throwOn: new Map(),
+    rejectOn: new Map(),
+    get(key: string): Promise<unknown> {
+      area.gets++;
+      const thrown = area.throwOn.get(key);
+      if (thrown) throw thrown;
+      const rejected = area.rejectOn.get(key);
+      if (rejected) return Promise.reject(rejected);
+      return Promise.resolve(area.data.get(key));
+    },
+    set(key: string, value: unknown): Promise<void> {
+      area.writes++;
+      const thrown = area.throwOn.get(key);
+      if (thrown) throw thrown;
+      const rejected = area.rejectOn.get(key);
+      if (rejected) return Promise.reject(rejected);
+      area.data.set(key, value);
+      return Promise.resolve();
+    },
+  };
+  return area;
+}
+
+export function createFakeStorage(): FakeStorage {
+  return { local: createArea(), session: createArea() };
+}
