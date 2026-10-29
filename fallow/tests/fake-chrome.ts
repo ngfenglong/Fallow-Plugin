@@ -18,7 +18,9 @@ export type FakeChrome = {
   getCalls: number[];
   counts: Record<string, number>;
   /** Operations the adapter must never perform. */
-  forbidden: { remove: number; move: number; update: number };
+  forbidden: { remove: number; move: number };
+  /** property bag of every tabs.update call */
+  updateCalls: Array<Record<string, unknown>>;
   nextId: number;
 };
 
@@ -36,7 +38,8 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
     nextDiscardId: undefined,
     getCalls: [],
     counts: {},
-    forbidden: { remove: 0, move: 0, update: 0 },
+    forbidden: { remove: 0, move: 0 },
+    updateCalls: [],
     nextId: 1000,
   };
 
@@ -87,7 +90,6 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
         f.tabs.splice(f.tabs.indexOf(t), 1, replacement);
         return replacement;
       }),
-      highlight: wrap('tabs.highlight', (_: chrome.tabs.HighlightInfo) => undefined),
       create: wrap('tabs.create', (p: chrome.tabs.CreateProperties) => {
         const t: FakeTab = { id: f.nextId++, url: p.url, windowId: 1, index: f.tabs.length };
         f.tabs.push(t);
@@ -95,7 +97,12 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
       }),
       remove: () => { f.forbidden.remove++; return Promise.resolve(); },
       move: () => { f.forbidden.move++; return Promise.resolve([]); },
-      update: () => { f.forbidden.update++; return Promise.resolve(undefined); },
+      update: wrap('tabs.update', (id: number, props: Record<string, unknown>) => {
+        f.updateCalls.push({ ...props });
+        const t = find(id);
+        if (!t) throw noTab(id);
+        return t;
+      }),
     },
     windows: {
       getAll: wrap('windows.getAll', () => f.windows),

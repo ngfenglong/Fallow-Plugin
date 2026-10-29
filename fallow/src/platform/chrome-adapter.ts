@@ -83,6 +83,8 @@ export function createChromeAdapter(api: typeof chrome): ChromeAdapter {
     async queryTabs() {
       const r = await guard(() => api.tabs.query({}));
       if (!r.ok) return r;
+      // Tabs without an id cannot be acted on, so they are dropped. An inventory
+      // built from this can therefore differ from the browser's own tab count.
       return { ok: true, value: r.value.filter((t) => t.id !== undefined).map(toTabFacts) };
     },
     getTab,
@@ -115,14 +117,11 @@ export function createChromeAdapter(api: typeof chrome): ChromeAdapter {
       return { ok: true, value: { requestedTabId: tabId, facts: r.value } };
     },
     async focusTab(tabId) {
-      // tabs.highlight activates a tab by index; tabs.update is never used.
-      const t = await guard(() => api.tabs.get(tabId));
-      if (!t.ok) return t;
-      const { windowId, index } = t.value;
-      const h = await guard(() => api.tabs.highlight({ windowId, tabs: index }));
-      if (!h.ok) return h;
+      // Activation only: tabs.update is called with { active: true } and never a url.
       return guard(async () => {
-        await api.windows.update(windowId, { focused: true });
+        const tab = await api.tabs.update(tabId, { active: true });
+        const windowId = tab?.windowId;
+        if (windowId !== undefined) await api.windows.update(windowId, { focused: true });
       });
     },
     async openUrlInNewTab(url) {

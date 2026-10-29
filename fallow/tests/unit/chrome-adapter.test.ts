@@ -51,14 +51,28 @@ describe('queryTabs', () => {
     const r = await adapter.queryTabs();
     expect(r.ok && r.value.length).toBe(1);
   });
-  it('does not mutate the tab objects it is handed', async () => {
-    const before = JSON.stringify(fake.tabs);
-    fake.tabs.forEach((t) => Object.freeze(t));
-    await adapter.queryTabs();
-    await adapter.getTab(1);
-    await adapter.discard(1);
-    expect(JSON.stringify(fake.tabs.filter((t) => t.id === undefined))).toBe('[]');
-    expect(before).toContain('"id":1');
+  it('copies rather than aliases: frozen source in, independent facts out', async () => {
+    const deepFreeze = (o: object) => { Object.values(o).forEach((v) => typeof v === 'object' && v && deepFreeze(v)); Object.freeze(o); };
+    fake.tabs.forEach(deepFreeze);
+    const src = fake.tabs[0]!;
+    const expected = {
+      tabId: src.id, windowId: src.windowId, groupId: src.groupId, url: src.url, title: '',
+      active: src.active, audible: src.audible, pinned: src.pinned, discarded: src.discarded,
+      autoDiscardable: src.autoDiscardable, status: src.status,
+    };
+    const all = await adapter.queryTabs();
+    const one = await adapter.getTab(1);
+    expect(all.ok && all.value[0]).toEqual(expected);
+    expect(one.ok && one.value).toEqual(expected);
+    if (all.ok && one.ok) {
+      all.value[0]!.url = 'mutated';
+      one.value.pinned = false;
+      expect(src.url).toBe('https://example.com/');
+      expect(src.pinned).toBe(true);
+      expect(all.value[0]).not.toBe(one.value);
+    }
+    const d = await adapter.discard(1); // discard also reads from a frozen table
+    expect(d.ok).toBe(true);
   });
 });
 
@@ -134,7 +148,7 @@ describe('no method ever rejects', () => {
     ['queryWindows', 'windows.getAll', (a) => a.queryWindows()],
     ['queryGroups', 'tabGroups.query', (a) => a.queryGroups()],
     ['discard', 'tabs.discard', (a) => a.discard(1)],
-    ['focusTab', 'tabs.highlight', (a) => a.focusTab(1)],
+    ['focusTab', 'tabs.update', (a) => a.focusTab(1)],
     ['openUrlInNewTab', 'tabs.create', (a) => a.openUrlInNewTab('https://a.test/')],
     ['getAlarm', 'alarms.get', (a) => a.getAlarm('x')],
     ['createAlarm', 'alarms.create', (a) => a.createAlarm('x', 1)],
@@ -171,10 +185,13 @@ describe('other operations', () => {
     expect(r.ok && r.value.tabId).toBe(1);
     expect(await adapter.getTab(77)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
   });
-  it('focuses a tab without update', async () => {
+  it('focuses a tab by activating it and focusing its window', async () => {
     expect(await adapter.focusTab(1)).toEqual({ ok: true, value: undefined });
-    expect(fake.counts['tabs.highlight']).toBe(1);
+    expect(fake.updateCalls).toEqual([{ active: true }]);
     expect(fake.counts['windows.update']).toBe(1);
+  });
+  it('reports tab-gone when focusing a missing tab', async () => {
+    expect(await adapter.focusTab(77)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
   });
   it('opens a url in a new tab and returns its id', async () => {
     const r = await adapter.openUrlInNewTab('https://a.test/');
@@ -197,7 +214,7 @@ describe('surface', () => {
       'openUrlInNewTab', 'queryGroups', 'queryTabs', 'queryWindows',
     ]);
   });
-  it('never calls tabs.remove, tabs.move or tabs.update across every operation', async () => {
+  it('never removes or moves a tab, and tabs.update only ever carries { active }', async () => {
     await adapter.queryTabs();
     await adapter.getTab(1);
     await adapter.queryWindows();
@@ -208,6 +225,12 @@ describe('surface', () => {
     await adapter.getAlarm('a');
     await adapter.createAlarm('a', 1);
     await adapter.clearAlarm('a');
-    expect(fake.forbidden).toEqual({ remove: 0, move: 0, update: 0 });
+    expect(fake.forbidden).toEqual({ remove: 0, move: 0 });
+    expect(fake.updateCalls.length).toBeGreaterThan(0);
+    for (const bag of fake.updateCalls) {
+      expect(Object.keys(bag).every((k) => k === 'active')).toBe(true);
+      expect(bag).not.toHaveProperty('url');
+      expect(bag).not.toHaveProperty('pendingUrl');
+    }
   });
 });
