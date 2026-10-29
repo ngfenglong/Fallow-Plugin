@@ -67,6 +67,11 @@ export function isSupportedUrl(url: string): boolean {
   return hostnameOf(url) !== null;
 }
 
+// Precondition: BOTH arguments must already be normalizeHostname output. `host` should
+// come from hostnameOf; each site.hostname should come from parseSettings/readSites.
+// This function does not re-normalize: a hand-written entry such as 'Example.com' or
+// 'example.com.' would never match, silently leaving a site the owner protected
+// unprotected. Callers and storage code must preserve that invariant.
 // Dot-boundary matching only. Never substring or regex matching: 'notexample.com'
 // must not match a protection for 'example.com'.
 export function matchesProtectedSite(

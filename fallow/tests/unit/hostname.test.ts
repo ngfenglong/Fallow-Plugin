@@ -98,3 +98,24 @@ describe('matchesProtectedSite', () => {
     expect(matchesProtectedSite('mail.google.com', sites)).toBe(false);
   });
 });
+
+describe('live tab URL through hostnameOf into matchesProtectedSite (DEFAULT_SETTINGS)', () => {
+  const matchesDefaults = (url: string) =>
+    matchesProtectedSite(hostnameOf(url)!, DEFAULT_SETTINGS.protectedSites);
+
+  it.each([
+    'https://docs.google.com/spreadsheets/d/abc123/edit#gid=0',
+    'https://docs.google.com/document/d/abc123/edit',
+    'https://chatgpt.com/c/some-conversation-id',
+    'https://meet.google.com/abc-defg-hij',
+  ])('protects %s', (url) => {
+    expect(matchesDefaults(url)).toBe(true);
+  });
+
+  it.each([
+    'https://mail.google.com/mail/u/0/#inbox',
+    'https://drive.google.com/drive/my-drive',
+  ])('does not protect sibling Google property %s', (url) => {
+    expect(matchesDefaults(url)).toBe(false);
+  });
+});
