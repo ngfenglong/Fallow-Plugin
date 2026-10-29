@@ -10,7 +10,7 @@ const T0 = 1_000;
 const NOW = T0 + 60 * 60_000; // an hour after discovery: old enough for everything
 
 function tab(p: FakeTab & { id: number }): FakeTab {
-  return { windowId: 10, groupId: -1, url: 'https://a.test/', title: `t${p.id}`, active: false,
+  return { index: p.id, windowId: 10, groupId: -1, url: 'https://a.test/', title: `t${p.id}`, active: false,
     audible: false, pinned: false, discarded: false, autoDiscardable: true, status: 'complete', ...p };
 }
 
@@ -46,26 +46,26 @@ describe('inventory: counts (A18)', () => {
   it('reconciles total as loaded plus unloaded, counting loading as loaded', async () => {
     await seed([tab({ id: 1 }), tab({ id: 2, status: 'loading' }), tab({ id: 3, discarded: true, status: 'unloaded' })]);
     const s = await inventory.capture(NOW);
-    expect(s.counts.total).toBe(3);
-    expect(s.counts.loaded).toBe(2);
-    expect(s.counts.unloaded).toBe(1);
-    expect(s.counts.total).toBe(s.counts.loaded + s.counts.unloaded);
+    expect(s.counts!.total).toBe(3);
+    expect(s.counts!.loaded).toBe(2);
+    expect(s.counts!.unloaded).toBe(1);
+    expect(s.counts!.total).toBe(s.counts!.loaded + s.counts!.unloaded);
     expect(s.rows.find((r) => r.tabId === 2)!.lifecycle).toBe('loading');
   });
   it('counts protected and eligible as overlapping classifications, not buckets', async () => {
     await seed([tab({ id: 1, active: true }), tab({ id: 2 }), tab({ id: 3, pinned: true })]);
     const s = await inventory.capture(NOW);
-    expect(s.counts.protected).toBe(2);
-    expect(s.counts.eligible).toBe(1);
-    expect(s.counts.loaded).toBe(3);
+    expect(s.counts!.protected).toBe(2);
+    expect(s.counts!.eligible).toBe(1);
+    expect(s.counts!.loaded).toBe(3);
     expect(s.rows.filter((r) => r.manualBulkDecision.eligible).map((r) => r.tabId)).toEqual([2]);
   });
   it('lets protected overlap total without double counting loaded', async () => {
     await seed([tab({ id: 1, active: true }), tab({ id: 2, audible: true, active: false })]);
     const s = await inventory.capture(NOW);
-    expect(s.counts.protected).toBe(2);
-    expect(s.counts.loaded).toBe(2);
-    expect(s.counts.eligible).toBeLessThanOrEqual(s.counts.total);
+    expect(s.counts!.protected).toBe(2);
+    expect(s.counts!.loaded).toBe(2);
+    expect(s.counts!.eligible).toBeLessThanOrEqual(s.counts!.total);
   });
   it('sizes the eligible count by what the bulk button would actually unload', async () => {
     // Fresh discovery: bulk is blocked by the one-minute floor, auto by the threshold; use a
@@ -74,8 +74,8 @@ describe('inventory: counts (A18)', () => {
     const s = await inventory.capture(T0 + 5 * 60_000);
     expect(s.rows.every((r) => !r.decision.eligible)).toBe(true);
     expect(s.rows.every((r) => r.manualBulkDecision.eligible)).toBe(true);
-    expect(s.counts.eligible).toBe(2);
-    expect(s.counts.eligible).toBe(s.rows.filter((r) => r.manualBulkDecision.eligible).length);
+    expect(s.counts!.eligible).toBe(2);
+    expect(s.counts!.eligible).toBe(s.rows.filter((r) => r.manualBulkDecision.eligible).length);
   });
   it('carries both decisions, in their own modes', async () => {
     await seed([tab({ id: 1 })]);
@@ -87,16 +87,16 @@ describe('inventory: counts (A18)', () => {
     await seed([tab({ id: 1 })]);
     const s = await inventory.capture(T0 + 10); // USED_RECENTLY under bulk
     expect(s.rows[0]!.manualBulkDecision.reasons).toContain('USED_RECENTLY');
-    expect(s.counts.protected).toBe(0);
-    expect(s.counts.eligible).toBe(0);
+    expect(s.counts!.protected).toBe(0);
+    expect(s.counts!.eligible).toBe(0);
   });
   it('counts a dashboard-origin tab as protected and not eligible', async () => {
     origins = async () => [1];
     mount();
     await seed([tab({ id: 1 }), tab({ id: 2 })]);
     const s = await inventory.capture(NOW);
-    expect(s.counts.protected).toBe(1);
-    expect(s.counts.eligible).toBe(1);
+    expect(s.counts!.protected).toBe(1);
+    expect(s.counts!.eligible).toBe(1);
   });
   it('reports background time for the row', async () => {
     await seed([tab({ id: 1 })]);
@@ -111,8 +111,8 @@ describe('inventory: unsupported and odd URLs', () => {
     expect(s.rows).toHaveLength(1);
     expect(s.rows[0]!.hostname).toBe(null);
     expect(s.rows[0]!.manualBulkDecision.reasons).toContain('UNSUPPORTED_URL');
-    expect(s.counts.eligible).toBe(0);
-    expect(s.counts.total).toBe(1);
+    expect(s.counts!.eligible).toBe(0);
+    expect(s.counts!.total).toBe(1);
   });
   it('carries the url scheme so a null hostname can still be displayed', async () => {
     await seed([tab({ id: 1, url: 'chrome://settings' }), tab({ id: 2, url: 'file:///tmp/x' }),
@@ -134,9 +134,9 @@ describe('inventory: structure and order (A01)', () => {
     fake.windows.splice(0, fake.windows.length, { id: 30 }, { id: 10, focused: true }, { id: 20 });
     fake.groups.push(group(7, 10), group(5, 10));
     await seed([
-      tab({ id: 3, windowId: 10, groupId: 7 }), tab({ id: 1, windowId: 10, groupId: 7 }), tab({ id: 2, windowId: 10, groupId: 7 }),
-      tab({ id: 4, windowId: 10 }), tab({ id: 5, windowId: 10, groupId: 5 }),
-      tab({ id: 6, windowId: 20 }), tab({ id: 7, windowId: 30 }),
+      tab({ id: 3, index: 0, windowId: 10, groupId: 7 }), tab({ id: 1, index: 1, windowId: 10, groupId: 7 }), tab({ id: 2, index: 2, windowId: 10, groupId: 7 }),
+      tab({ id: 4, index: 3, windowId: 10 }), tab({ id: 5, index: 4, windowId: 10, groupId: 5 }),
+      tab({ id: 6, index: 0, windowId: 20 }), tab({ id: 7, index: 0, windowId: 30 }),
     ]);
     const s = await inventory.capture(NOW);
     expect(s.windows.map((w) => w.label)).toEqual(['Window 1', 'Window 2', 'Window 3']);
@@ -155,7 +155,7 @@ describe('inventory: structure and order (A01)', () => {
     expect(s.windows[0]!.groups[0]!.title).toBe('g1');
     expect(s.windows[0]!.groups[0]!.color).toBe('blue');
     expect(s.rows.every((r) => r.lifecycle === 'loaded')).toBe(true);
-    expect(s.counts.unloaded).toBe(0);
+    expect(s.counts!.unloaded).toBe(0);
   });
   it('puts groupId -1 tabs in ungroupedTabIds, never a phantom group', async () => {
     await seed([tab({ id: 1, groupId: -1 })]);
@@ -169,7 +169,7 @@ describe('inventory: structure and order (A01)', () => {
     expect(s.windows[0]!.groups).toHaveLength(1);
     expect(s.windows[0]!.groups[0]!.groupId).toBe(99);
     expect(s.windows[0]!.groups[0]!.tabIds).toEqual([1, 2]);
-    expect(s.counts.total).toBe(2);
+    expect(s.counts!.total).toBe(2);
   });
   it('still shows a window that holds only unsupported tabs, with its label', async () => {
     fake.windows.push({ id: 20 });
@@ -185,6 +185,24 @@ describe('inventory: structure and order (A01)', () => {
     const b = await inventory.capture(NOW + 1);
     expect(a.windows.map((w) => [w.windowId, w.label])).toEqual([[10, 'Window 1'], [20, 'Window 2']]);
     expect(b.windows.map((w) => [w.windowId, w.label])).toEqual([[10, 'Window 1'], [20, 'Window 2']]);
+  });
+});
+
+describe('inventory: explicit ordering', () => {
+  it('orders by (windowId, index) even when the browser returns tabs scrambled', async () => {
+    fake.windows.splice(0, fake.windows.length, { id: 20 }, { id: 10 });
+    fake.groups.push(group(1, 10));
+    await seed([
+      tab({ id: 50, index: 2, windowId: 10, groupId: 1 }), tab({ id: 60, index: 0, windowId: 20 }),
+      tab({ id: 30, index: 0, windowId: 10, groupId: 1 }), tab({ id: 70, index: 3, windowId: 10 }),
+      tab({ id: 40, index: 1, windowId: 10 }), tab({ id: 61, index: 1, windowId: 20 }),
+      tab({ id: 20, index: 4, windowId: 10, groupId: 1 }),
+    ]);
+    const s = await inventory.capture(NOW);
+    expect(s.rows.map((r) => r.tabId)).toEqual([30, 40, 50, 70, 20, 60, 61]);
+    expect(s.windows[0]!.groups[0]!.tabIds).toEqual([30, 50, 20]);
+    expect(s.windows[0]!.ungroupedTabIds).toEqual([40, 70]);
+    expect(s.windows[1]!.ungroupedTabIds).toEqual([60, 61]);
   });
 });
 
@@ -246,13 +264,43 @@ describe('inventory: one scan per capture', () => {
     fake.counts = {};
     const s = await inventory.capture(NOW);
     expect(s.rows).toHaveLength(200);
-    expect(s.counts.total).toBe(200);
-    expect(s.counts.total).toBe(s.counts.loaded + s.counts.unloaded);
-    expect(s.counts.eligible).toBe(s.rows.filter((r) => r.manualBulkDecision.eligible).length);
-    expect(s.counts.protected).toBe(s.rows.filter((r) => r.manualBulkDecision.reasons.some((c) =>
+    expect(s.counts!.total).toBe(200);
+    expect(s.counts!.total).toBe(s.counts!.loaded + s.counts!.unloaded);
+    expect(s.counts!.eligible).toBe(s.rows.filter((r) => r.manualBulkDecision.eligible).length);
+    expect(s.counts!.protected).toBe(s.rows.filter((r) => r.manualBulkDecision.reasons.some((c) =>
       ['SELECTED', 'AUDIBLE', 'LOADING', 'TAB_PROTECTED', 'SITE_PROTECTED', 'PINNED', 'BROWSER_PROTECTED', 'DASHBOARD_ORIGIN'].includes(c))).length);
     expect(s.windows.reduce((n, w) => n + w.ungroupedTabIds.length + w.groups.reduce((m, g) => m + g.tabIds.length, 0), 0)).toBe(200);
     expect([fake.counts['tabs.query'], fake.counts['windows.getAll'], fake.counts['tabGroups.query']]).toEqual([1, 1, 1]);
+  });
+});
+
+describe('inventory: protection set', () => {
+  it('counts one row per protection code, once per row, and nothing else', async () => {
+    await repos.settings.write({ ...DEFAULT_SETTINGS, protectedSites: [{ hostname: 'kept.test', includeSubdomains: false }] });
+    origins = async () => [8];
+    mount();
+    const tabs = [
+      tab({ id: 1, url: 'https://kept.test/' }),            // SITE_PROTECTED
+      tab({ id: 2 }),                                        // TAB_PROTECTED (below)
+      tab({ id: 3, autoDiscardable: false }),                // BROWSER_PROTECTED
+      tab({ id: 4, active: true, windowId: 11 }),            // SELECTED
+      tab({ id: 5, audible: true }),                         // AUDIBLE
+      tab({ id: 6, pinned: true }),                          // PINNED
+      tab({ id: 7, status: 'loading' }),                     // LOADING
+      tab({ id: 8 }),                                        // DASHBOARD_ORIGIN
+      tab({ id: 9, url: 'chrome://settings' }),              // unsupported: not protection
+      tab({ id: 10, discarded: true, status: 'unloaded' }),  // already unloaded: not protection
+      tab({ id: 11 }),                                       // plain
+      tab({ id: 12, active: true, audible: true, pinned: true, windowId: 12 }), // three at once
+    ];
+    await seed(tabs);
+    const t = createTracker({ adapter: createChromeAdapter(fake.api), activity: repos.activity });
+    await t.setTabProtection(2, true);
+    const s = await inventory.capture(NOW);
+    expect(s.counts!.protected).toBe(9);
+    expect(s.counts!.eligible).toBe(1);
+    expect(s.rows.find((r) => r.tabId === 12)!.manualBulkDecision.reasons).toEqual(
+      expect.arrayContaining(['SELECTED', 'AUDIBLE', 'PINNED']));
   });
 });
 
@@ -265,6 +313,7 @@ describe('inventory: a failed read never looks like an empty result', () => {
     expect(s.tabsAvailable).toBe(false);
     expect(s.failedReads).toContain('tabs');
     expect(s.rows).toEqual([]);
+    expect(s.counts).toBeNull();
     expect(JSON.stringify(storage.session.data.get('fallow.activity'))).toBe(before);
   });
   it('reports tabsAvailable true with an empty list when the browser really has no tabs', async () => {
@@ -279,7 +328,7 @@ describe('inventory: a failed read never looks like an empty result', () => {
     const s = await inventory.capture(NOW);
     expect(s.failedReads).toEqual(['windows']);
     expect(s.windows.map((w) => w.label)).toEqual(['Window 1', 'Window 2']);
-    expect(s.counts.total).toBe(2);
+    expect(s.counts!.total).toBe(2);
   });
   it('keeps grouping tabs and flags groups when the group query fails', async () => {
     fake.groups.push(group(1));
@@ -307,13 +356,20 @@ describe('inventory: a failed read never looks like an empty result', () => {
     expect(s.failedReads).toEqual(['settings']);
     expect(s.settings).toEqual(DEFAULT_SETTINGS);
   });
+  it('flags settings and session when real storage rejects, so defaults are never presented as the owner\'s', async () => {
+    await seed([tab({ id: 1 })]);
+    storage.local.rejectOn.set('get:fallow.settings', new Error('unavailable'));
+    storage.session.rejectOn.set('get:fallow.session', new Error('unavailable'));
+    const s = await inventory.capture(NOW);
+    expect(s.failedReads).toEqual(['session', 'settings']);
+  });
   it('flags dashboard origins when that read rejects', async () => {
     await seed([tab({ id: 1 })]);
     origins = () => Promise.reject(new Error('boom'));
     mount();
     const s = await inventory.capture(NOW);
     expect(s.failedReads).toEqual(['dashboardOrigins']);
-    expect(s.counts.total).toBe(1);
+    expect(s.counts!.total).toBe(1);
   });
   it('flags activity and holds every tab when the tracker cannot reconcile', async () => {
     await seed([tab({ id: 1 })]);
@@ -323,6 +379,6 @@ describe('inventory: a failed read never looks like an empty result', () => {
     inventory = createInventory({ adapter, tracker, session: repos.session, settings: repos.settings, dashboardOrigins: origins });
     const s = await inventory.capture(NOW);
     expect(s.failedReads).toContain('activity');
-    expect(s.counts.eligible).toBe(0);
+    expect(s.counts!.eligible).toBe(0);
   });
 });

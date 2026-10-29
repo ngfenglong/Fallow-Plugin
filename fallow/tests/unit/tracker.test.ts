@@ -8,7 +8,7 @@ import { createFakeStorage, type FakeStorage } from '../fake-storage';
 
 function facts(p: Partial<TabFacts> & { tabId: number }): TabFacts {
   return {
-    windowId: 10, groupId: -1, url: 'https://a.test/', title: '', active: false, audible: false,
+    index: 0, windowId: 10, groupId: -1, url: 'https://a.test/', title: '', active: false, audible: false,
     pinned: false, discarded: false, autoDiscardable: true, status: 'complete', ...p,
   };
 }

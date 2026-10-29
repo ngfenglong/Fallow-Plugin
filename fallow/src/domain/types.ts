@@ -5,6 +5,8 @@ export type LifecycleState = 'loaded' | 'loading' | 'unloaded';
 
 export type TabFacts = {
   tabId: number; windowId: number; groupId: number;
+  /** Position within the window, as the browser reports it; -1 when absent. */
+  index: number;
   url: string; title: string;
   active: boolean; audible: boolean; pinned: boolean;
   discarded: boolean; autoDiscardable: boolean;

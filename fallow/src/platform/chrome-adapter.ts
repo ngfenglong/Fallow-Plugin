@@ -53,6 +53,7 @@ export function toTabFacts(tab: chrome.tabs.Tab): TabFacts {
   const status = STATUSES.find((s) => s === (tab.status as string));
   return {
     tabId: tab.id ?? -1,
+    index: tab.index ?? -1,
     windowId: tab.windowId ?? -1,
     groupId: tab.groupId ?? -1,
     url: tab.url ?? tab.pendingUrl ?? '',

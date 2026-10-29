@@ -1,19 +1,23 @@
 // Reads and assembles; never acts on a tab. One capture = one tab query, one window
 // query, one group query and one tracker reconcile.
 //
-// Failure policy, read by read. A failed read must never render as a legitimate empty
-// result, so every degradation is named in `failedReads`:
-//   tabs             -> the snapshot is unavailable (tabsAvailable false, no rows, no
-//                       reconcile). An empty inventory would read as "you have no tabs".
-//   windows          -> sections are derived from the tabs, in ascending windowId order,
-//                       with focused false (unknown).
-//   groups           -> groups are derived from the tabs' groupIds with blank metadata.
-//                       A group id absent from a successful list is handled the same way.
-//   session          -> graceUntil null (no grace known).
-//   settings         -> shipped defaults.
-//   dashboardOrigins -> treated as none; the owner can see the flag.
-//   activity         -> (reconcile or snapshot failed) no tab is trusted to have any
-//                       background time, so timing holds every tab. Fails closed.
+// Every failed read is named in `failedReads`; none renders as a legitimate empty result.
+// What each failure then does to the data:
+//   FAIL CLOSED (the data gets more cautious or is withheld):
+//     tabs     -> tabsAvailable false, rows/windows empty, counts null, no reconcile.
+//     activity -> (reconcile or tracker snapshot rejects) no tab has any known background
+//                 time, so the timing checks hold every tab.
+//   FAIL OPEN (the data is still produced, with a stand-in that can allow MORE):
+//     dashboardOrigins -> treated as none, so a bulk run could include the tab the dashboard
+//                 was opened from (A14). The flag is the only signal here; the executor must
+//                 itself refuse a manual-bulk run it cannot verify (Task 11).
+//     session  -> graceUntil null, so an auto decision no longer sees startup grace.
+//     settings -> shipped defaults, so the owner's ADDED protected sites are missing and
+//                 such a site can read as eligible.
+//   DEGRADED PRESENTATION ONLY (no eligibility effect):
+//     windows  -> sections derived from tabs, focused false (unknown).
+//     groups   -> groups derived from tab groupIds with blank title, grey, not collapsed.
+// Ordering is explicit: rows by (windowId, index), never the query's own order.
 import type { ChromeAdapter, GroupShape, WindowShape } from '../platform/chrome-adapter';
 import type { SessionRepo, SettingsRepo } from '../platform/storage';
 import type { Tracker } from './tracker';
@@ -37,10 +41,12 @@ export type WindowSection = {
   ungroupedTabIds: number[];
 };
 export type FailedRead = 'tabs' | 'windows' | 'groups' | 'session' | 'settings' | 'dashboardOrigins' | 'activity';
+export type Counts = { total: number; loaded: number; unloaded: number; eligible: number; protected: number };
 export type Snapshot = {
   capturedAt: number;
   windows: WindowSection[]; rows: TabRow[];
-  counts: { total: number; loaded: number; unloaded: number; eligible: number; protected: number };
+  /** null exactly when tabsAvailable is false: a failed scan has no counts, not zero counts. */
+  counts: Counts | null;
   settings: Settings; graceUntil: number | null;
   automationNote: string | null;
   /** False when the tab query failed: rows/windows are empty because of a failure, not because there are no tabs. */
@@ -104,12 +110,12 @@ export function createInventory(deps: {
       failed.add('tabs');
       return {
         capturedAt: now, windows: [], rows: [],
-        counts: { total: 0, loaded: 0, unloaded: 0, eligible: 0, protected: 0 },
+        counts: null,
         settings: cfg, graceUntil, automationNote,
         tabsAvailable: false, failedReads: READ_ORDER.filter((r) => failed.has(r)),
       };
     }
-    const tabs: TabFacts[] = tabsR.value;
+    const tabs: TabFacts[] = [...tabsR.value].sort((a, b) => a.windowId - b.windowId || a.index - b.index);
 
     // Activity: a failure leaves every tab with no known background time, which holds it.
     let activity: Record<number, TabActivity> = {};

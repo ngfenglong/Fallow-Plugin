@@ -15,10 +15,14 @@ beforeEach(() => {
 describe('toTabFacts', () => {
   it('defaults every absent field for an id-only tab', () => {
     expect(toTabFacts({ id: 1 } as chrome.tabs.Tab)).toEqual({
-      tabId: 1, windowId: -1, groupId: -1, url: '', title: '',
+      tabId: 1, index: -1, windowId: -1, groupId: -1, url: '', title: '',
       active: false, audible: false, pinned: false, discarded: false,
       autoDiscardable: true, status: 'complete',
     });
+  });
+  it('carries the browser tab index, and -1 when absent', () => {
+    expect(toTabFacts({ id: 1, index: 7 } as chrome.tabs.Tab).index).toBe(7);
+    expect(toTabFacts({ id: 1 } as chrome.tabs.Tab).index).toBe(-1);
   });
   it('never yields undefined in any field', () => {
     const facts = toTabFacts({ id: 1 } as chrome.tabs.Tab);
@@ -41,7 +45,7 @@ describe('queryTabs', () => {
     fake.tabs.splice(0, 1, { id: 1, windowId: 10, url: 'https://example.com/' });
     const r = await adapter.queryTabs();
     expect(r.ok && r.value[0]).toEqual({
-      tabId: 1, windowId: 10, groupId: -1, url: 'https://example.com/', title: '',
+      tabId: 1, index: -1, windowId: 10, groupId: -1, url: 'https://example.com/', title: '',
       active: false, audible: false, pinned: false, discarded: false,
       autoDiscardable: true, status: 'complete',
     });
@@ -60,7 +64,7 @@ describe('queryTabs', () => {
     fake.tabs.forEach(deepFreeze);
     const src = fake.tabs[0]!;
     const expected = {
-      tabId: src.id, windowId: src.windowId, groupId: src.groupId, url: src.url, title: '',
+      tabId: src.id, index: src.index ?? -1, windowId: src.windowId, groupId: src.groupId, url: src.url, title: '',
       active: src.active, audible: src.audible, pinned: src.pinned, discarded: src.discarded,
       autoDiscardable: src.autoDiscardable, status: src.status,
     };

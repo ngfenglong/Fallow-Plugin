@@ -107,11 +107,15 @@ describe('SettingsRepo', () => {
     expect((s as unknown as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it('resolves to defaults when the storage get throws or rejects', async () => {
+  it('propagates a storage-level failure instead of reporting defaults', async () => {
     fake.local.throwOn.set(KEYS.settings, new Error('boom'));
-    await expect(repos.settings.read()).resolves.toEqual(DEFAULT_SETTINGS);
+    await expect(repos.settings.read()).rejects.toThrow('boom');
     fake.local.throwOn.clear();
-    fake.local.rejectOn.set(KEYS.settings, new Error('boom'));
+    fake.local.rejectOn.set(KEYS.settings, new Error('unavailable'));
+    await expect(repos.settings.read()).rejects.toThrow('unavailable');
+  });
+
+  it('still returns defaults for genuinely absent data', async () => {
     await expect(repos.settings.read()).resolves.toEqual(DEFAULT_SETTINGS);
   });
 
@@ -227,6 +231,14 @@ describe('SessionRepo', () => {
     await expect(repos.session.read()).resolves.toBeNull();
     fake.session.set(KEYS.session, { discoveredAt: 5, graceUntil: Number.NaN });
     await expect(repos.session.read()).resolves.toBeNull();
+  });
+
+  it('propagates a storage-level failure instead of reporting no session', async () => {
+    fake.session.throwOn.set(KEYS.session, new Error('boom'));
+    await expect(repos.session.read()).rejects.toThrow('boom');
+    fake.session.throwOn.clear();
+    fake.session.rejectOn.set(KEYS.session, new Error('unavailable'));
+    await expect(repos.session.read()).rejects.toThrow('unavailable');
   });
 
   it('returns null for a record whose getters throw', async () => {

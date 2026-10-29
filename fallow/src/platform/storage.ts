@@ -163,12 +163,9 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
 
   const settings: SettingsRepo = {
     async read() {
-      let raw: unknown;
-      try {
-        raw = await local.get(KEYS.settings);
-      } catch {
-        raw = undefined;
-      }
+      // A storage failure propagates: only absent or corrupt data falls back to defaults.
+      // Otherwise the owner's added protected sites would silently vanish.
+      const raw = await local.get(KEYS.settings);
       // The only way settings leave this module. parseSettings never throws and
       // returns normalised, clamped values, or the defaults for anything unusable.
       return parseSettings(raw);
@@ -193,12 +190,8 @@ export function createRepos(areas: { local: StorageArea; session: StorageArea })
 
   const sessionRepo: SessionRepo = {
     async read() {
-      let raw: unknown;
-      try {
-        raw = await session.get(KEYS.session);
-      } catch {
-        raw = undefined;
-      }
+      // A storage failure propagates; only absent or corrupt data reads as null.
+      const raw = await session.get(KEYS.session);
       return parseSession(raw);
     },
     async write(s) {

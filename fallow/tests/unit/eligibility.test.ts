@@ -9,7 +9,7 @@ const MODES: EligibilityMode[] = ['auto', 'manual-bulk', 'manual-single'];
 
 function facts(overrides: Partial<TabFacts> = {}): TabFacts {
   return {
-    tabId: 1, windowId: 1, groupId: -1,
+    tabId: 1, index: 0, windowId: 1, groupId: -1,
     url: 'https://example.com/', title: 'Example',
     active: false, audible: false, pinned: false,
     discarded: false, autoDiscardable: true,
