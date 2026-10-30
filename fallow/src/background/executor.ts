@@ -100,6 +100,12 @@ export type BatchReport = {
   blocked: BlockedReason | null;
   /** False when the crash-safety record could not be written or read in full: this report may be incomplete. */
   crashSafe: boolean;
+  /**
+   * Reports for a crashed batch this operation reconciled before claiming the record slot.
+   * Absent when there was nothing to reconcile. Carried rather than discarded: the rows go
+   * to history either way, but a caller that drops this never learns a crash was resolved.
+   */
+  reconciled?: BatchReport[];
 };
 
 /** The crash-safety record. One per operation, in session storage under KEYS.batch. */
@@ -275,7 +281,13 @@ export function createExecutor(deps: {
    */
   async function readOrigins(): Promise<number[] | null> {
     try {
-      return [...(await dashboardOrigins())];
+      const raw = await dashboardOrigins();
+      // A non-array would spread into something that silently matches no tab: a string '23'
+      // becomes ['2','3'], so includes(23) fails and the origin tab is discarded. An origin
+      // list we cannot read as tab ids is an unreadable list, not an empty one.
+      if (!Array.isArray(raw)) return null;
+      const ids = raw.filter(isIndex);
+      return ids.length === raw.length ? ids : null;
     } catch {
       return null;
     }
@@ -585,7 +597,9 @@ export function createExecutor(deps: {
     const startedAt = own(raw, 'startedAt');
     const pendingRaw = own(raw, 'pending');
     const doneRaw = own(raw, 'done');
-    if (typeof operationId !== 'string' || operationId === '' || /[/?#\s]/.test(operationId)) return null;
+    // The shared rule, not a second looser copy: the old inline check caught the URL
+    // delimiters but not the 128-character cap that storage also enforces.
+    if (!isStorableOperationId(operationId)) return null;
     if (!isOneOf(TRIGGERS, trigger)) return null;
     if (!Array.isArray(pendingRaw) || !Array.isArray(doneRaw)) return null;
 
@@ -711,7 +725,20 @@ export function createExecutor(deps: {
       // never replays a command, so this issues no request; it logs what was not observed
       // and clears the record. Called directly rather than through `serial`, which this
       // operation already holds.
-      await runReconcile(now());
+      const reconciled = await runReconcile(now());
+      if (reconciled.length > 0) report.reconciled = reconciled;
+      // A reconcile that could not READ or parse the record reported nothing and cleared
+      // nothing, so the record is still there and still unexplained. Writing over it now
+      // would destroy the only evidence of what the crashed batch did — the same "a crash
+      // becomes nothing happened" defect this reconcile exists to prevent. An operation that
+      // cannot safely take the record slot does not run, exactly as one that cannot verify
+      // its own exclusions does not run.
+      const unresolved = reconciled.find((r) => r.blocked !== null);
+      if (unresolved !== undefined) {
+        report.blocked = unresolved.blocked;
+        report.crashSafe = false;
+        return report;
+      }
 
       record = { operationId, trigger, mode, startedAt: now(), pending: [...plan], done: [] };
       await writeRecord(report, record);

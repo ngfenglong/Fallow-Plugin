@@ -396,6 +396,15 @@ describe('executor: crash reconciliation (A21)', () => {
     expect(await storage.session.get(KEYS.batch)).toBeUndefined();
   });
 
+  it('rejects a stored record whose operation id is too long to store', async () => {
+    // The parser used to carry its own looser copy of the rule: it caught the URL delimiters
+    // but not the 128-character cap that storage enforces, so a record could parse as valid
+    // and then have every one of its history rows dropped on write.
+    await storage.session.set(KEYS.batch, inFlight({ operationId: 'x'.repeat(129), pending: [2] }));
+    const reports = await executor.reconcileUnfinished(NOW);
+    expect(reports).toMatchObject([{ blocked: 'crash-record-unreadable' }]);
+  });
+
   it('REMOVES the in-flight key rather than storing undefined under it', async () => {
     // `get` returning undefined cannot tell "absent" from "present and set to undefined",
     // so the assertion above passes either way — and chrome.storage has no documented
@@ -463,6 +472,35 @@ describe('executor: crash reconciliation (A21)', () => {
     expect(fake.calls.discard).toBe(1); // the crashed batch is reported, never replayed
   });
 
+  it('refuses to run rather than overwrite a crashed record it could not read', async () => {
+    // The same defect through a different door: when the crash-record READ fails,
+    // reconciliation reports nothing and clears nothing. Proceeding would overwrite the
+    // crashed record and the owner would never learn what happened to tabs 4 and 5.
+    // An action that cannot safely take the crash record must not run.
+    await storage.session.set(KEYS.batch, inFlight({ operationId: 'op1', pending: [4, 5] }));
+    storage.session.rejectOn.set('get:' + KEYS.batch, new Error('storage unavailable'));
+
+    const r = await executor.execute({ kind: 'tab', tabId: 3 }, 'manual-single', 'manual-single', NOW);
+    expect(r.blocked).toBe('crash-record-unreadable');
+    expect(r.requested).toBe(0);
+    expect(fake.calls.discard).toBe(0);
+    // The crashed record survives for a later reconcile rather than being destroyed.
+    expect(storage.session.data.has(KEYS.batch)).toBe(true);
+  });
+
+  it('carries the reports of a crashed batch it reconciled on the way in', async () => {
+    // Reconciliation's own reports were being discarded, so a caller had no way to see that
+    // a crashed batch had just been resolved.
+    await storage.session.set(KEYS.batch, inFlight({ operationId: 'op1', pending: [4, 5] }));
+    const r = await executor.execute({ kind: 'tab', tabId: 3 }, 'manual-single', 'manual-single', NOW);
+    expect(r.reconciled).toMatchObject([{ operationId: 'op1', unknown: 2 }]);
+  });
+
+  it('carries no reconciled reports when there was no crashed record', async () => {
+    const r = await executor.execute({ kind: 'tab', tabId: 3 }, 'manual-single', 'manual-single', NOW);
+    expect(r.reconciled).toBeUndefined();
+  });
+
   it('writes the in-flight record before the first request and clears it after', async () => {
     const seen: Array<InFlightBatch | undefined> = [];
     fake.onBeforeDiscard = () => {
@@ -509,6 +547,42 @@ describe('executor: blocked reports carry copy the dashboard can show', () => {
     expect(note).toMatch(/\.$/);
     expect(note).not.toMatch(/chrome/i);
     expect(note).not.toMatch(/suspend/i);
+  });
+
+  it('blocks when the executor own origins read fails although the scan read succeeded', async () => {
+    // A14. Every other test shares one origins function with the inventory, so a failure
+    // trips the inventory's failedReads flag first and the executor's OWN block never runs.
+    // Here the scan's read succeeds and the executor's read fails a moment later, which is
+    // the only way to reach that branch — and the race a real session storage can produce.
+    await seed(baseTabs());
+    let calls = 0;
+    origins = async () => {
+      calls += 1;
+      if (calls >= 2) throw new Error('session read failed');
+      return [];
+    };
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
+    expect(r.blocked).toBe('dashboard-origins-unreadable');
+    expect(fake.calls.discard).toBe(0);
+  });
+
+  it('treats an origins list it cannot read as tab ids as unreadable, not as empty', async () => {
+    // A dep resolving a string spreads into characters: '23' becomes ['2','3'], so
+    // includes(23) never matches and the origin tab would be discarded. Silently acting on a
+    // list that matches nothing is exactly the A14 hole, reached by another route.
+    await seed(baseTabs());
+    origins = (async () => '23') as unknown as () => Promise<readonly number[]>;
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
+    expect(r.blocked).not.toBeNull();
+    expect(fake.calls.discard).toBe(0);
+  });
+
+  it('treats an origins array holding a non-id as unreadable', async () => {
+    await seed(baseTabs());
+    origins = (async () => [3, 'nope']) as unknown as () => Promise<readonly number[]>;
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
+    expect(r.blocked).not.toBeNull();
+    expect(fake.calls.discard).toBe(0);
   });
 
   it('gives a blocked report a reason the owner can be shown, not just a zeroed count', async () => {

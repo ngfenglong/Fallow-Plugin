@@ -273,6 +273,24 @@ describe('executor: bounded work (A16)', () => {
     expect(fake.calls.discard).toBe(40);
     expectCountersSum(r);
   });
+
+  it('honours a dashboard opened partway through a large batch', async () => {
+    // A14. The origins list is re-read per chunk, not hoisted out of the loop, so a
+    // dashboard the owner opens mid-batch protects its origin tab for the chunks that
+    // follow. Hoisting the read would leave that tab unprotected and still pass every
+    // other test, so this is the only thing pinning the re-read.
+    await seedBacklog(40);
+    const lateOrigin = 130; // ids run 100..139; this one sits in the final chunk
+    let discards = 0;
+    origins = async () => (discards >= MANUAL_CHUNK_SIZE ? [lateOrigin] : []);
+    fake.onAfterDiscard = () => { discards += 1; };
+
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
+    expect(r.results.find((x) => x.tabId === lateOrigin))
+      .toEqual({ tabId: lateOrigin, outcome: 'skipped', reason: 'DASHBOARD_ORIGIN' });
+    expect(fake.tabs.find((t) => t.id === lateOrigin)?.discarded).toBe(false);
+    expectCountersSum(r);
+  });
 });
 
 describe('executor: cancellation', () => {
