@@ -70,7 +70,8 @@ function mount() {
   inventory = { capture: (at) => { captures.push(at); return real.capture(at); } };
   executor = createExecutor({
     adapter, inventory, tracker, settings: repos.settings, history: repos.history,
-    session: repos.session, storage: storage.session, now, sleep,
+    session: repos.session, storage: storage.session,
+    dashboardOrigins: () => origins(), now, sleep,
   });
 }
 
@@ -142,6 +143,23 @@ describe('executor: preview', () => {
     const p = await executor.preview({ kind: 'tabs', tabIds: [2, 404] }, 'manual-bulk', NOW);
     expect(p.eligibleTabIds).toEqual([2]);
     expect(p.skipped).toEqual([{ tabId: 404, reasons: ['TAB_GONE'] }]);
+  });
+
+  it('does not claim a named tab is gone when the tab scan itself failed', async () => {
+    // The named-scope exemption is justified by "a named tab is re-read directly", which is
+    // true of execute and false of preview: preview only looks ids up in the snapshot's rows.
+    // An empty row list is a failed scan, never evidence that these tabs stopped existing.
+    fake.rejectOn.set('tabs.query', new Error('no tabs for you'));
+    const p = await executor.preview({ kind: 'tabs', tabIds: [2, 3] }, 'manual-bulk', NOW);
+    expect(p.skipped).toEqual([
+      { tabId: 2, reasons: ['VERIFY_FAILED'] },
+      { tabId: 3, reasons: ['VERIFY_FAILED'] },
+    ]);
+    expect(p.skippedCountsByReason).toEqual({ VERIFY_FAILED: 2 });
+    expect(p.eligibleTabIds).toEqual([]);
+    // Not blocked: execute re-reads a named tab directly, so the action the dashboard would
+    // offer for one named tab is still fully verifiable.
+    expect(p.blocked).toBeNull();
   });
 
   it('derives manual-single eligibility by dropping only the bulk-only reasons', async () => {
@@ -225,6 +243,29 @@ describe('executor: confirmation contract (milestone 0)', () => {
     expect(fake.calls.discard).toBe(1);
   });
 
+  it('does not count a discard confirmed from the object chrome resolved with', async () => {
+    // milestone 0 measured tabs.discard always resolving with discarded:true. Trusting that
+    // object is confirming by invocation, which plan §7 forbids: only a read counts.
+    fake.nextDiscardId = 99;
+    fake.onBeforeDiscard = () => { fake.rejectOn.set('tabs.get', new Error('No tab with id: 99')); };
+    const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
+    expect(r).toMatchObject({ confirmed: 0, unknown: 1 });
+    expect(r.results[0]).toMatchObject({ tabId: 2, outcome: 'unknown', newTabId: 99 });
+    expect(fake.calls.discard).toBe(1); // never re-issued
+    expectCountersSum(r);
+  });
+
+  it('confirms an unobserved discard once a later read observes the tab unloaded', async () => {
+    fake.nextDiscardId = 99;
+    fake.onBeforeDiscard = () => { fake.rejectOn.set('tabs.get', new Error('No tab with id: 99')); };
+    onSleep = () => { fake.rejectOn.delete('tabs.get'); };
+    const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
+    expect(r).toMatchObject({ confirmed: 1, unknown: 0 });
+    expect(r.results[0]).toMatchObject({ tabId: 2, outcome: 'confirmed', newTabId: 99 });
+    expect(elapsed()).toBe(50); // one backoff step, then the observation
+    expect(fake.calls.discard).toBe(1);
+  });
+
   it('records unknown rather than success when the tab stays loaded', async () => {
     fake.discardBehaviour = 'silent-noop';
     const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
@@ -235,11 +276,30 @@ describe('executor: confirmation contract (milestone 0)', () => {
   });
 
   it('stops re-reading after the confirmation timeout and issues one discard only', async () => {
-    fake.discardBehaviour = 'silent-noop';
+    // Was driven by 'silent-noop', which now yields no minted id and so correctly enters no
+    // loop at all. The behaviour under test — a bounded observation loop and exactly one
+    // discard — is driven here by a minted id whose re-reads keep failing.
+    fake.nextDiscardId = 99;
+    fake.discardedStaysLoaded = true;
     await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
     expect(fake.calls.discard).toBe(1);
     expect(elapsed()).toBeLessThanOrEqual(DISCARD_CONFIRM_TIMEOUT_MS);
     expect(elapsed()).toBeGreaterThan(0);
+  });
+
+  it('reports unknown without sleeping or reading when chrome mints no id', async () => {
+    // No minted id means nothing this code may read: the requested id is forbidden. It must
+    // not spend the confirmation window reading the wrong tab to manufacture an answer.
+    fake.discardBehaviour = 'silent-noop';
+    const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
+    expect(r.results[0]).toEqual({ tabId: 2, outcome: 'unknown' });
+    expect(fake.calls.discard).toBe(1);
+    // Exactly one read of tab 2: revalidation's own read BEFORE the discard, which is
+    // allowed. Any further read of 2 would be the forbidden post-discard re-read, and the
+    // old code made several of them while burning the whole confirmation window.
+    expect(fake.getCalls.filter((id) => id === 2)).toHaveLength(1);
+    expect(elapsed()).toBe(0);
+    expectCountersSum(r);
   });
 
   it('never closes or navigates a tab when discard is rejected', async () => {
@@ -336,6 +396,21 @@ describe('executor: crash reconciliation (A21)', () => {
     expect(await storage.session.get(KEYS.batch)).toBeUndefined();
   });
 
+  it('REMOVES the in-flight key rather than storing undefined under it', async () => {
+    // `get` returning undefined cannot tell "absent" from "present and set to undefined",
+    // so the assertion above passes either way — and chrome.storage has no documented
+    // behaviour for setting a key to undefined. The key must actually be gone, because
+    // chrome.storage.session has a small quota and session records are its main consumer.
+    await storage.session.set(KEYS.batch, inFlight({ operationId: 'op1', pending: [2] }));
+    await executor.reconcileUnfinished(NOW);
+    expect(storage.session.data.has(KEYS.batch)).toBe(false);
+  });
+
+  it('REMOVES the in-flight key when a batch finishes normally', async () => {
+    await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
+    expect(storage.session.data.has(KEYS.batch)).toBe(false);
+  });
+
   it('returns no reports and writes nothing when there is no in-flight record', async () => {
     const writesBefore = storage.session.writes;
     const reports = await executor.reconcileUnfinished(NOW);
@@ -367,6 +442,25 @@ describe('executor: crash reconciliation (A21)', () => {
     const reports = await executor.reconcileUnfinished(NOW);
     expect(reports).toEqual([]);
     expect(await storage.session.get(KEYS.batch)).toBeUndefined();
+  });
+
+  it('reports a crashed batch rather than overwriting its record with a new operation', async () => {
+    // KEYS.batch holds exactly one record. An alarm-driven execute that wins the queue race
+    // after a restart must not turn the crashed batch into "nothing happened".
+    await storage.session.set(KEYS.batch, inFlight({
+      operationId: 'op1', pending: [4, 5], done: [{ tabId: 2, outcome: 'confirmed' }],
+    }));
+    const r = await executor.execute({ kind: 'tab', tabId: 3 }, 'manual-single', 'manual-single', NOW);
+    expect(r).toMatchObject({ confirmed: 1, requested: 1 });
+
+    const crashed = (await repos.history.read()).filter((h) => h.operationId === 'op1');
+    expect(crashed.map((h) => [h.sessionTabId, h.outcome])).toEqual([
+      [2, 'confirmed'], [4, 'unknown'], [5, 'unknown'],
+    ]);
+    // And this operation's own row is still there, under its own id.
+    expect((await repos.history.read()).filter((h) => h.operationId === r.operationId))
+      .toMatchObject([{ sessionTabId: 3, outcome: 'confirmed' }]);
+    expect(fake.calls.discard).toBe(1); // the crashed batch is reported, never replayed
   });
 
   it('writes the in-flight record before the first request and clears it after', async () => {
@@ -440,6 +534,20 @@ describe('executor: settings defaults are never mistaken for the owner settings'
     // And the code survives a round trip through history, which drops any reason it
     // does not recognise: a dropped reason would make the row read as "no reason given".
     expect((await repos.history.read())[0]).toMatchObject({ sessionTabId: 2, reason: 'VERIFY_FAILED' });
+    expectCountersSum(r);
+  });
+
+  it('does not claim the browser refused a request it never made when the tab cannot be re-read', async () => {
+    await seed(baseTabs());
+    fake.rejectOn.set('tabs.get', new Error('kaboom'));
+    const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
+    // No discard was issued, so this is not API_REJECTED: nothing was rejected.
+    expect(r.results[0]).toEqual({
+      tabId: 2, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'tab-unreadable',
+    });
+    expect(r).toMatchObject({ skipped: 1, failed: 0 });
+    expect(fake.calls.discard).toBe(0);
+    expect(fake.tabs.find((t) => t.id === 2)!.discarded).toBe(false);
     expectCountersSum(r);
   });
 

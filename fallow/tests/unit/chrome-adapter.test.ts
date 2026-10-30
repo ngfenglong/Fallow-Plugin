@@ -109,11 +109,17 @@ describe('discard', () => {
   });
 
   it('reports the post-discard tab state rather than assuming success', async () => {
-    fake.discardBehaviour = 'silent-noop';
+    // Was written against a fallback that re-read the REQUESTED id, which the Global
+    // Constraints forbid; the old assertions (facts.tabId === 1, getCalls === [1]) encoded
+    // that violation. The behaviour under test — never assume the discard worked — is
+    // pinned here against the minted id instead.
+    fake.nextDiscardId = 99;
+    fake.discardedStaysLoaded = true;
     const r = await adapter.discard(1);
-    expect(r.ok && r.value.facts.discarded).toBe(false);
-    expect(r.ok && r.value.facts.tabId).toBe(1); // fallback to requested id
-    expect(fake.getCalls).toEqual([1]);
+    expect(r.ok && r.value.facts?.discarded).toBe(false);
+    expect(r.ok && r.value.facts?.tabId).toBe(99);
+    expect(fake.getCalls).toEqual([99]);
+    expect(fake.getCalls).not.toContain(1);
   });
 
   it('turns a rejected discard into a rejected result', async () => {
@@ -125,8 +131,8 @@ describe('discard', () => {
     fake.nextDiscardId = 99;
     const r = await adapter.discard(1);
     expect(r.ok && r.value).toMatchObject({ requestedTabId: 1 });
-    expect(r.ok && r.value.facts.tabId).toBe(99);
-    expect(r.ok && r.value.facts.discarded).toBe(true);
+    expect(r.ok && r.value.facts?.tabId).toBe(99);
+    expect(r.ok && r.value.facts?.discarded).toBe(true);
     expect(fake.getCalls).toContain(99);
     expect(fake.getCalls).not.toContain(1);
   });
@@ -137,6 +143,48 @@ describe('discard', () => {
     expect(r.ok && r.value.facts).toMatchObject({ windowId: 10, groupId: 5, pinned: true, audible: true });
   });
 
+  it('says the facts were observed when the post-discard re-read succeeded', async () => {
+    fake.nextDiscardId = 99;
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value.observed).toBe(true);
+  });
+
+  it.each([
+    ['chrome resolves with nothing', 'silent-noop' as const],
+    ['chrome resolves with a tab carrying no id', 'resolve-without-id' as const],
+  ])('never re-reads the requested id when %s', async (_label, behaviour) => {
+    // Global Constraints: "never re-read a tab by the id you asked to discard". Without a
+    // minted id there is nothing safe to read, so the outcome is simply unobserved.
+    fake.discardBehaviour = behaviour;
+    const r = await adapter.discard(1);
+    expect(fake.getCalls).not.toContain(1);
+    expect(r.ok && r.value).toMatchObject({ requestedTabId: 1, observed: false, mintedTabId: null });
+  });
+
+  it('reports no facts at all when chrome resolves a discard with nothing', async () => {
+    // There is no tab object and no id to read: inventing facts here is what would turn an
+    // unverifiable discard into a confirmed one.
+    fake.discardBehaviour = 'silent-noop';
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value.facts).toBe(null);
+  });
+
+  it('carries the minted id when the re-read succeeds', async () => {
+    fake.nextDiscardId = 99;
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value.mintedTabId).toBe(99);
+  });
+
+  it('says the facts were not observed when they came from the discard result itself', async () => {
+    // milestone 0: tabs.discard resolves with an object that always carries discarded:true,
+    // so a caller must be able to tell that object apart from a real re-read.
+    fake.nextDiscardId = 99;
+    fake.rejectOn.set('tabs.get', new Error('No tab with id: 99'));
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value).toMatchObject({ requestedTabId: 1, observed: false });
+    expect(r.ok && r.value.facts).toMatchObject({ tabId: 99, discarded: true });
+  });
+
   it('still succeeds with the new id when the re-read fails after a good discard', async () => {
     fake.nextDiscardId = 99;
     fake.rejectOn.set('tabs.get', new Error('No tab with id: 99'));
@@ -144,17 +192,37 @@ describe('discard', () => {
     expect(r.ok && r.value.requestedTabId).toBe(1);
     expect(r.ok && r.value.facts).toMatchObject({ tabId: 99, discarded: true, windowId: 10 });
   });
-  it('reports tab-gone only when chrome gave no tab and the re-read fails', async () => {
+  it('does not report a discard chrome accepted as a failure it cannot prove', async () => {
+    // Replaces a test that asserted { ok: false, kind: 'tab-gone' } here. That verdict came
+    // from re-reading the REQUESTED id — forbidden — and asserted the tab was gone when all
+    // that is known is that chrome resolved without an id. Unobserved, not failed.
     fake.discardBehaviour = 'silent-noop';
     fake.rejectOn.set('tabs.get', new Error('No tab with id: 1'));
-    expect(await adapter.discard(1)).toMatchObject({ ok: false, error: { kind: 'tab-gone' } });
+    const r = await adapter.discard(1);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.value).toMatchObject({ observed: false, mintedTabId: null });
+    expect(fake.getCalls).toEqual([]);
+  });
+
+  it('looks for the minted id and not the requested one when the re-read fails', async () => {
+    // The surviving half of the old test: a failed re-read is still handled, but the id it
+    // reaches for is the minted one. The tab vanishes after the discard, so the read runs
+    // and fails on 99 rather than being short-circuited before it records the id.
+    fake.nextDiscardId = 99;
+    fake.onAfterDiscard = () => {
+      fake.tabs.splice(fake.tabs.findIndex((t) => t.id === 99), 1);
+    };
+    const r = await adapter.discard(1);
+    expect(r.ok && r.value).toMatchObject({ observed: false, mintedTabId: 99 });
+    expect(fake.getCalls).toEqual([99]);
+    expect(fake.getCalls).not.toContain(1);
   });
   it('reports a same-id discard: requested equals new id and discarded is true', async () => {
     fake.nextDiscardId = 1;
     const r = await adapter.discard(1);
     expect(r.ok && r.value.requestedTabId).toBe(1);
-    expect(r.ok && r.value.facts.tabId).toBe(1);
-    expect(r.ok && r.value.facts.discarded).toBe(true);
+    expect(r.ok && r.value.facts?.tabId).toBe(1);
+    expect(r.ok && r.value.facts?.discarded).toBe(true);
   });
 
   it('reports tab-gone for an unknown tab', async () => {

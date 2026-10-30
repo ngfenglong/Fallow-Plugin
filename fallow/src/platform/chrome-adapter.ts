@@ -9,7 +9,20 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: AdapterErro
 export type WindowShape = { windowId: number; focused: boolean };
 export type GroupShape = { groupId: number; windowId: number; title: string; color: string; collapsed: boolean };
 // Chrome mints a NEW tab id on discard (milestone 0): facts.tabId is the new id.
-export type DiscardOutcome = { requestedTabId: number; facts: TabFacts };
+// `observed` is true only when `facts` came from a real re-read of the tab after the
+// discard. It is false when the re-read failed and the facts are the object `tabs.discard`
+// itself resolved with — which milestone 0 measured as always carrying discarded:true, so
+// it is evidence that the call was made, never that the tab unloaded. A caller that counts
+// confirmations by observation must not trust `facts` while `observed` is false.
+// `mintedTabId` is the id Chrome reported for the post-discard tab, and the ONLY id a
+// caller may re-read: the Global Constraints forbid re-reading the id that was asked to be
+// discarded. It is null when Chrome resolved without an id, which leaves nothing safe to
+// read and no way to confirm; `facts` is null in the case where Chrome resolved with no
+// tab at all, because there is nothing to report and inventing it is what would turn an
+// unverifiable discard into a confirmed one.
+export type DiscardOutcome = {
+  requestedTabId: number; facts: TabFacts | null; observed: boolean; mintedTabId: number | null;
+};
 
 export interface ChromeAdapter {
   queryTabs(): Promise<Result<TabFacts[]>>;
@@ -114,19 +127,29 @@ export function createChromeAdapter(api: typeof chrome): ChromeAdapter {
     async discard(tabId) {
       const d = await guard(() => api.tabs.discard(tabId));
       if (!d.ok) return d;
-      // Chrome returns a NEW tab with a different id. Re-read by that id, never
-      // the requested one; fall back only when Chrome resolved without a tab.
-      const readId = d.value?.id ?? tabId;
-      const r = await getTab(readId);
-      if (r.ok) return { ok: true, value: { requestedTabId: tabId, facts: r.value } };
-      // The discard succeeded and Chrome handed us the post-discard tab: use it
-      // rather than report a successful unload as a failure and lose the new id.
-      if (d.value) {
-        const facts = toTabFacts(d.value);
-        if (d.value.id === undefined) facts.tabId = tabId;
-        return { ok: true, value: { requestedTabId: tabId, facts } };
+      // Chrome mints a NEW tab id on discard (milestone 0), and that id is the only one we
+      // may read: re-reading the requested id is forbidden outright, and would report a
+      // tab that unloaded perfectly as gone. Without a minted id there is nothing safe to
+      // read, so the outcome is unobserved and the caller cannot confirm it.
+      const resolved = d.value;
+      if (resolved?.id === undefined) {
+        const facts = resolved ? toTabFacts(resolved) : null;
+        return { ok: true, value: { requestedTabId: tabId, facts, observed: false, mintedTabId: null } };
       }
-      return r;
+      const mintedTabId = resolved.id;
+      const r = await getTab(mintedTabId);
+      if (r.ok) {
+        return { ok: true, value: { requestedTabId: tabId, facts: r.value, observed: true, mintedTabId } };
+      }
+      // The discard succeeded and Chrome handed us the post-discard tab: keep it rather
+      // than report a successful unload as a failure and lose the new id. Flagged
+      // `observed: false`, because nothing about the tab was actually read — milestone 0
+      // measured this object as always carrying discarded:true, so it is evidence the call
+      // was made, never that the tab unloaded.
+      return {
+        ok: true,
+        value: { requestedTabId: tabId, facts: toTabFacts(resolved), observed: false, mintedTabId },
+      };
     },
     async focusTab(tabId) {
       // Activation only: tabs.update is called with { active: true } and never a url.

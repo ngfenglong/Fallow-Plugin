@@ -10,6 +10,8 @@ export type FakeArea = StorageArea & {
   writes: number;
   /** number of get() calls */
   gets: number;
+  /** number of remove() calls */
+  removes: number;
   /** key -> error thrown synchronously by get/set. Use 'get:key' or 'set:key' to target one op. */
   throwOn: Map<string, Error>;
   /** key -> error the get/set promise rejects with. Use 'get:key' or 'set:key' to target one op. */
@@ -23,6 +25,7 @@ function createArea(): FakeArea {
     data: new Map(),
     writes: 0,
     gets: 0,
+    removes: 0,
     throwOn: new Map(),
     rejectOn: new Map(),
     get(key: string): Promise<unknown> {
@@ -40,6 +43,17 @@ function createArea(): FakeArea {
       const rejected = area.rejectOn.get(`set:${key}`) ?? area.rejectOn.get(key);
       if (rejected) return Promise.reject(rejected);
       area.data.set(key, value);
+      return Promise.resolve();
+    },
+    remove(key: string): Promise<void> {
+      area.removes++;
+      const thrown = area.throwOn.get(`remove:${key}`) ?? area.throwOn.get(key);
+      if (thrown) throw thrown;
+      const rejected = area.rejectOn.get(`remove:${key}`) ?? area.rejectOn.get(key);
+      if (rejected) return Promise.reject(rejected);
+      // A real delete, so `data.has(key)` goes false. Storing undefined would leave the key
+      // present and make a "cleared" assertion pass while nothing was cleared.
+      area.data.delete(key);
       return Promise.resolve();
     },
   };

@@ -25,7 +25,7 @@
 // which is what the owner's action referenced and what the preview showed. The id Chrome
 // minted travels separately in `newTabId` so the tracker can migrate its activity record.
 import type { ChromeAdapter } from '../platform/chrome-adapter';
-import { KEYS, type HistoryEntry, type HistoryRepo, type SessionRepo, type SettingsRepo, type StorageArea } from '../platform/storage';
+import { KEYS, isStorableOperationId, type HistoryEntry, type HistoryRepo, type SessionRepo, type SettingsRepo, type StorageArea } from '../platform/storage';
 import type { Inventory, Snapshot, TabRow } from './inventory';
 import type { Tracker } from './tracker';
 import { decide, type EligibilityMode } from '../domain/eligibility';
@@ -116,7 +116,14 @@ export type InFlightBatch = {
 
 export interface Executor {
   preview(scope: Scope, mode: EligibilityMode, now: number): Promise<Preview>;
-  execute(scope: Scope, mode: EligibilityMode, trigger: Trigger, now: number): Promise<BatchReport>;
+  /**
+   * `operationId` is optional and is minted when absent. A caller that intends to offer
+   * "cancel remaining" supplies its own, because `cancel(operationId)` is otherwise
+   * unreachable: the id would exist only inside this component and in session storage.
+   */
+  execute(
+    scope: Scope, mode: EligibilityMode, trigger: Trigger, now: number, operationId?: string,
+  ): Promise<BatchReport>;
   cancel(operationId: string): void;
   reconcileUnfinished(now: number): Promise<BatchReport[]>;
 }
@@ -158,9 +165,15 @@ function own(raw: Record<string, unknown>, key: string): unknown {
 export function createExecutor(deps: {
   adapter: ChromeAdapter; inventory: Inventory; tracker: Tracker;
   settings: SettingsRepo; history: HistoryRepo; session: SessionRepo; storage: StorageArea;
+  /**
+   * The tabs this dashboard was opened from (A14). Read here directly, not inferred from
+   * the snapshot's rows: a failed tab scan leaves no rows to infer it from, and inferring
+   * an empty list from that would discard the tab the owner was reading.
+   */
+  dashboardOrigins: () => Promise<readonly number[]>;
   now: () => number; sleep: (ms: number) => Promise<void>;
 }): Executor {
-  const { adapter, inventory, tracker, settings, history, storage, now, sleep } = deps;
+  const { adapter, inventory, tracker, settings, history, storage, dashboardOrigins, now, sleep } = deps;
   // `session` is deliberately unused: the startup grace window comes from the snapshot the
   // operation planned from, so the executor can never disagree with what the preview showed.
   void deps.session;
@@ -253,17 +266,26 @@ export function createExecutor(deps: {
     return [...rows].sort((a, b) => b.backgroundMs - a.backgroundMs || a.tabId - b.tabId);
   }
 
+  /**
+   * The dashboard origins, read from the dep rather than inferred from the snapshot's rows.
+   * Inferring the list from the rows whose bulk decision names DASHBOARD_ORIGIN is only
+   * sound while there are rows: a failed tab scan empties them, which would read as "no
+   * tab is the dashboard's origin" and unload the page the owner was looking at (A14).
+   * `null` means the read failed and the exclusion cannot be applied at all.
+   */
+  async function readOrigins(): Promise<number[] | null> {
+    try {
+      return [...(await dashboardOrigins())];
+    } catch {
+      return null;
+    }
+  }
+
   /** The dashboard origins and grace window this operation plans against. */
-  function contextOf(snapshot: Snapshot): { graceUntil: number | null; origins: number[] } {
-    return {
-      graceUntil: snapshot.graceUntil,
-      // The snapshot does not carry the origin list, but the tabs it protected are exactly
-      // those whose bulk decision names DASHBOARD_ORIGIN. A failed read is blocked above,
-      // so this is never an empty stand-in for a list that could not be read.
-      origins: snapshot.rows
-        .filter((r) => r.manualBulkDecision.reasons.includes('DASHBOARD_ORIGIN'))
-        .map((r) => r.tabId),
-    };
+  function contextOf(
+    snapshot: Snapshot, origins: readonly number[],
+  ): { graceUntil: number | null; origins: number[] } {
+    return { graceUntil: snapshot.graceUntil, origins: [...origins] };
   }
 
   // ---- preview ------------------------------------------------------------------
@@ -292,9 +314,13 @@ export function createExecutor(deps: {
       else skipped.push({ tabId: row.tabId, reasons: [...decision.reasons] });
     }
     // A named tab the scan does not know about is reported, not dropped: an id that is not
-    // there is a fact about that tab, not an absence of one.
+    // there is a fact about that tab, not an absence of one — but only when the scan worked.
+    // A named scope is exempt from the tabs-unavailable block because execute re-reads a
+    // named tab directly; preview does not, so with no rows it cannot tell a closed tab
+    // from an unreadable one and must not assert either.
     if (named !== null) {
-      for (const id of named) if (!byId.has(id)) skipped.push({ tabId: id, reasons: ['TAB_GONE'] });
+      const missing: ReasonCode = snapshot.tabsAvailable ? 'TAB_GONE' : 'VERIFY_FAILED';
+      for (const id of named) if (!byId.has(id)) skipped.push({ tabId: id, reasons: [missing] });
     }
 
     // Under auto the preview must promise no more than execution would take.
@@ -379,7 +405,10 @@ export function createExecutor(deps: {
     const read = await adapter.getTab(tabId);
     if (!read.ok) {
       if (read.error.kind === 'tab-gone') return asResult({ tabId, outcome: 'skipped', reason: 'TAB_GONE' });
-      return asResult({ tabId, outcome: 'failed', reason: 'API_REJECTED', cause: 'tab-unreadable' });
+      // Not API_REJECTED and not 'failed': no discard was issued, so nothing was refused.
+      // `failed` is the count of requests the browser declined; a read Fallow could not
+      // make is a tab held, which is what the other two VERIFY_FAILED branches record too.
+      return asResult({ tabId, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'tab-unreadable' });
     }
     // Only the hostname is ever kept: a history row must never carry a URL.
     hostnames.set(tabId, hostnameOf(read.value.url));
@@ -422,23 +451,42 @@ export function createExecutor(deps: {
       return { tabId: requestedTabId, outcome: 'failed', reason: 'API_REJECTED' };
     }
 
-    const facts = requested.value.facts;
-    const minted = facts.tabId !== requestedTabId ? facts.tabId : undefined;
+    const { facts, observed, mintedTabId } = requested.value;
+    // The requested id is what the owner's action referenced, so it is never reported as a
+    // new id even in the corner where Chrome hands back the same one.
+    const minted = mintedTabId !== null && mintedTabId !== requestedTabId ? mintedTabId : undefined;
     const confirmed = (newTabId: number | undefined): ExecutedResult =>
       newTabId === undefined
         ? { tabId: requestedTabId, outcome: 'confirmed' }
         : { tabId: requestedTabId, outcome: 'confirmed', newTabId };
+    const unconfirmed = (reason?: ReasonCode): ExecutedResult => {
+      const result: ExecutedResult = minted === undefined
+        ? { tabId: requestedTabId, outcome: 'unknown' }
+        : { tabId: requestedTabId, outcome: 'unknown', newTabId: minted };
+      if (reason !== undefined) result.reason = reason;
+      return result;
+    };
 
-    if (isUnloaded(facts)) return confirmed(minted);
+    // Only a real re-read counts. `observed` is false when the facts are the object
+    // `tabs.discard` resolved with, which milestone 0 measured as always carrying
+    // discarded:true: trusting it would make `confirmed` increment by invocation, which
+    // plan §7 forbids. Unobserved facts fall through to the observation loop below, and if
+    // no read ever sees the tab unloaded the result is `unknown`.
+    if (observed && facts !== null && isUnloaded(facts)) return confirmed(minted);
 
-    // Not confirmed yet. Re-read the new id with bounded backoff inside the confirmation
-    // window; never re-issue the discard.
+    // Without a minted id there is no id this code is allowed to read: the requested one is
+    // forbidden and the tab's real id is unknown. Nothing can be observed, so say so rather
+    // than read the wrong tab to manufacture an answer.
+    if (mintedTabId === null) return unconfirmed();
+
+    // Not confirmed yet. Re-read the MINTED id with bounded backoff inside the confirmation
+    // window; never the requested id, and never re-issue the discard.
     const deadline = startedAt + DISCARD_CONFIRM_TIMEOUT_MS;
     let lastReadWasGone = false;
     for (const delay of CONFIRM_BACKOFF_MS) {
       if (now() + delay > deadline) break;
       await sleep(delay);
-      const again = await adapter.getTab(facts.tabId);
+      const again = await adapter.getTab(mintedTabId);
       if (again.ok) {
         if (isUnloaded(again.value)) return confirmed(minted);
         lastReadWasGone = false;
@@ -448,11 +496,7 @@ export function createExecutor(deps: {
     }
     // Never observed unloaded. 'unknown' is the honest record: the request was accepted and
     // what became of the tab was not observed within the window.
-    const result: ExecutedResult = minted === undefined
-      ? { tabId: requestedTabId, outcome: 'unknown' }
-      : { tabId: requestedTabId, outcome: 'unknown', newTabId: minted };
-    if (lastReadWasGone) result.reason = 'TAB_GONE';
-    return result;
+    return unconfirmed(lastReadWasGone ? 'TAB_GONE' : undefined);
   }
 
   async function runOne(
@@ -511,7 +555,7 @@ export function createExecutor(deps: {
       // history.append swallows its own failures; this is belt and braces.
     }
     try {
-      await storage.set(KEYS.batch, undefined);
+      await storage.remove(KEYS.batch);
     } catch {
       report.crashSafe = false;
     }
@@ -622,7 +666,7 @@ export function createExecutor(deps: {
       // See finish().
     }
     try {
-      await storage.set(KEYS.batch, undefined);
+      await storage.remove(KEYS.batch);
     } catch {
       for (const report of reports) report.crashSafe = false;
     }
@@ -632,9 +676,13 @@ export function createExecutor(deps: {
   // ---- the batch ----------------------------------------------------------------
 
   async function runExecute(
-    scope: Scope, mode: EligibilityMode, trigger: Trigger, at: number,
+    scope: Scope, mode: EligibilityMode, trigger: Trigger, at: number, givenId?: string,
   ): Promise<BatchReport> {
-    const operationId = nextOperationId(at);
+    // A caller id that storage would reject is replaced, never used: parseHistoryRow drops
+    // the whole row on a bad id, so honouring one would unload the owner's tabs and log
+    // nothing at all. The action still runs — refusing it would punish the owner for a
+    // caller's mistake — and the report carries the id the history actually used.
+    const operationId = isStorableOperationId(givenId) ? givenId : nextOperationId(at);
     const report = emptyReport(operationId, trigger);
     const hostnames = new Map<number, string | null>();
     let record: InFlightBatch | null = null;
@@ -656,6 +704,15 @@ export function createExecutor(deps: {
       // Nothing to do: no record, no request, no history.
       if (plan.length === 0) return report;
 
+      // KEYS.batch holds exactly one record and the write below overwrites it. A record that
+      // survived a worker death is therefore reported FIRST: if an alarm-driven execute wins
+      // the queue race after a restart, the crashed batch's `unknown` results would
+      // otherwise be destroyed and a crash would read as "nothing happened". Reconciliation
+      // never replays a command, so this issues no request; it logs what was not observed
+      // and clears the record. Called directly rather than through `serial`, which this
+      // operation already holds.
+      await runReconcile(now());
+
       record = { operationId, trigger, mode, startedAt: now(), pending: [...plan], done: [] };
       await writeRecord(report, record);
 
@@ -676,7 +733,15 @@ export function createExecutor(deps: {
           snapshot = next;
           for (const row of snapshot.rows) if (!hostnames.has(row.tabId)) hostnames.set(row.tabId, row.hostname);
         }
-        const ctx = contextOf(snapshot);
+        // Re-read per chunk, like the snapshot: a dashboard opened mid-batch adds an origin
+        // this batch must then honour.
+        const origins = await readOrigins();
+        if (origins === null && mode === 'manual-bulk') {
+          // The same ruling as the snapshot-flag block above, for the executor's own read.
+          report.blocked = 'dashboard-origins-unreadable';
+          break;
+        }
+        const ctx = contextOf(snapshot, origins ?? []);
         for (const tabId of plan.slice(start, start + chunkSize)) {
           // Checked between tabs and between chunks; a request already issued is allowed
           // to finish, because cancelling it would not give the tab back.
@@ -713,8 +778,8 @@ export function createExecutor(deps: {
       // Reads only, so it does not queue behind a batch; it issues no request of any kind.
       return preview(scope, mode, at);
     },
-    execute(scope, mode, trigger, at) {
-      return serial(() => runExecute(scope, mode, trigger, at));
+    execute(scope, mode, trigger, at, operationId) {
+      return serial(() => runExecute(scope, mode, trigger, at, operationId));
     },
     cancel(operationId) {
       cancelledOps.add(operationId);

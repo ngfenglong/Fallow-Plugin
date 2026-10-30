@@ -1,7 +1,10 @@
 // Scriptable test double for the `chrome` namespace. Not a mock library: a small
 // in-memory browser whose behaviour a test steers through plain fields.
 export type FakeTab = Partial<chrome.tabs.Tab>;
-export type DiscardBehaviour = 'confirm' | 'silent-noop' | 'reject';
+// 'silent-noop' resolves with undefined; 'resolve-without-id' resolves with a tab object
+// that carries no id. Both leave the caller with no minted id to re-read, and neither may
+// be answered by re-reading the id that was asked to be discarded.
+export type DiscardBehaviour = 'confirm' | 'silent-noop' | 'reject' | 'resolve-without-id';
 
 /** Shorthand call counters, derived from `counts`. Read-only. */
 export type FakeCalls = {
@@ -24,6 +27,8 @@ export type FakeChrome = {
   rejectOn: Map<string, Error>;
   discardBehaviour: DiscardBehaviour;
   nextDiscardId?: number;
+  /** a discard chrome accepts that does not unload the tab: the id changes, the state does not */
+  discardedStaysLoaded: boolean;
   /** ids passed to tabs.get, in order */
   getCalls: number[];
   counts: Record<string, number>;
@@ -62,6 +67,7 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
     rejectOn: new Map(),
     discardBehaviour: 'confirm',
     nextDiscardId: undefined,
+    discardedStaysLoaded: false,
     getCalls: [],
     counts: {},
     forbidden: { remove: 0, move: 0 },
@@ -148,9 +154,16 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
             return undefined;
           }
           const newId = f.nextDiscardId ?? f.nextId++;
-          const replacement: FakeTab = { ...t, id: newId, discarded: true, status: 'unloaded' };
+          // discardedStaysLoaded models a discard chrome accepted that did not take effect:
+          // the id changes but the tab is still loaded, so nothing may be confirmed.
+          const replacement: FakeTab = f.discardedStaysLoaded
+            ? { ...t, id: newId }
+            : { ...t, id: newId, discarded: true, status: 'unloaded' };
           f.tabs.splice(f.tabs.indexOf(t), 1, replacement);
           await f.onAfterDiscard?.(id, n);
+          if (f.discardBehaviour === 'resolve-without-id') {
+            return { ...replacement, id: undefined };
+          }
           return replacement;
         } finally {
           f.inFlightDiscards--;

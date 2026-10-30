@@ -61,7 +61,8 @@ function mount() {
   inventory = { capture: (at) => { captures.push(at); return real.capture(at); } };
   executor = createExecutor({
     adapter, inventory, tracker, settings: repos.settings, history: repos.history,
-    session: repos.session, storage: storage.session, now, sleep,
+    session: repos.session, storage: storage.session,
+    dashboardOrigins: () => origins(), now, sleep,
   });
 }
 
@@ -192,6 +193,24 @@ describe('executor: revalidation races', () => {
     expect(r).toMatchObject({ requested: 1, confirmed: 1, blocked: null });
   });
 
+  it('still applies the dashboard exclusion to a named bulk unload when the tab scan fails (A14)', async () => {
+    // A transient tabs.query failure leaves no rows to infer the origin list from, while the
+    // origins read itself succeeded — so nothing blocks the run. The tab the owner was
+    // reading when they opened the dashboard must still be excluded.
+    origins = async () => [2];
+    fake.rejectOn.set('tabs.query', new Error('no tabs for you'));
+    const requestedDiscards: number[] = [];
+    fake.onBeforeDiscard = (id) => { requestedDiscards.push(id); };
+
+    const r = await executor.execute({ kind: 'tabs', tabIds: [2, 3] }, 'manual-bulk', 'manual-bulk', NOW);
+
+    expect(r.results.find((x) => x.tabId === 2)).toEqual({ tabId: 2, outcome: 'skipped', reason: 'DASHBOARD_ORIGIN' });
+    expect(requestedDiscards).toEqual([3]);
+    expect(fake.tabs.find((t) => t.id === 2)!.discarded).toBe(false);
+    expect(r).toMatchObject({ blocked: null, confirmed: 1, skipped: 1 });
+    expectCountersSum(r);
+  });
+
   it('refuses a bulk action when the tab list could not be read at all', async () => {
     fake.rejectOn.set('tabs.query', new Error('no tabs for you'));
     const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
@@ -282,6 +301,57 @@ describe('executor: cancellation', () => {
     expect(discardedIds()).toHaveLength(12);
     for (const id of laterChunks) expect(fake.tabs.find((t) => t.id === id)!.discarded).toBe(false);
     expectCountersSum(r);
+  });
+
+  it('cancels a batch by the operation id its caller supplied', async () => {
+    // Plan §11 requires "cancel remaining" for a large manual batch. Without a
+    // caller-supplied id the only way to learn the id is to read KEYS.batch out of session
+    // storage, so this test reads no storage at all.
+    fake.onAfterDiscard = (_id, n) => { if (n === 3) executor.cancel('caller-id'); };
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW, 'caller-id');
+    expect(r.operationId).toBe('caller-id');
+    expect(r.cancelled).toBe(true);
+    expect(r.requested).toBe(3);
+    expect((await repos.history.read()).every((h) => h.operationId === 'caller-id')).toBe(true);
+  });
+
+  it('mints its own operation id when the caller supplies none', async () => {
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW);
+    expect(r.operationId).toMatch(/^fallow-/);
+  });
+
+  it('replaces an unstorable caller id rather than losing the whole batch from history', async () => {
+    // storage.ts validates an operation id against /^[^/?#\s]{1,128}$/ and parseHistoryRow
+    // drops the ENTIRE row when it fails, so an id carrying whitespace or a '/' would
+    // unload the owner's tabs and log nothing at all. The action still runs; the id is
+    // replaced with one that can be stored.
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW, 'bad id/with spaces');
+    expect(r.operationId).toMatch(/^fallow-/);
+    expect(r.confirmed).toBe(40);
+    const rows = await repos.history.read();
+    expect(rows).toHaveLength(40);
+    expect(rows.every((h) => h.operationId === r.operationId)).toBe(true);
+  });
+
+  it.each([
+    ['a space', 'has space'],
+    ['a slash', 'has/slash'],
+    ['a query mark', 'has?query'],
+    ['a fragment mark', 'has#frag'],
+    ['the empty string', ''],
+    ['over 128 characters', 'x'.repeat(129)],
+  ])('rejects an operation id with %s', async (_label, given) => {
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW, given);
+    expect(r.operationId).not.toBe(given);
+    expect(r.operationId).toMatch(/^fallow-/);
+    expect(await repos.history.read()).toHaveLength(40);
+  });
+
+  it('keeps a caller id that is exactly 128 characters', async () => {
+    const given = 'x'.repeat(128);
+    const r = await executor.execute({ kind: 'all' }, 'manual-bulk', 'manual-bulk', NOW, given);
+    expect(r.operationId).toBe(given);
+    expect(await repos.history.read()).toHaveLength(40);
   });
 
   it('ignores a cancel aimed at another operation', async () => {

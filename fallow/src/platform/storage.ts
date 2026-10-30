@@ -41,6 +41,13 @@ export interface HistoryRepo {
 export interface StorageArea {
   get(key: string): Promise<unknown>;
   set(key: string, value: unknown): Promise<void>;
+  /**
+   * Deletes the key. Setting a key to `undefined` is NOT a delete: `get` cannot tell an
+   * absent key from one holding `undefined`, and chrome.storage has no documented behaviour
+   * for storing it. chrome.storage.session has a small quota, so a record that is finished
+   * with has to actually go.
+   */
+  remove(key: string): Promise<void>;
 }
 
 const TRIGGERS: readonly Trigger[] = ['manual-single', 'manual-bulk', 'automatic', 'external'];
@@ -110,8 +117,15 @@ function parseSession(raw: unknown): SessionState | null {
 }
 
 // An operation id is an opaque token. Anything containing a URL delimiter or whitespace
-// is not one, so a row carrying one is dropped rather than persisted.
-const OPERATION_ID = /^[^/?#\s]{1,128}$/;
+// is not one, so a row carrying one is dropped rather than persisted. Exported because a
+// caller may supply its own id, and a producer that cannot see this rule would silently
+// lose every row of a batch: one definition, used by both ends.
+export const OPERATION_ID = /^[^/?#\s]{1,128}$/;
+
+/** Whether an operation id can be stored. A row carrying one that cannot is dropped. */
+export function isStorableOperationId(value: unknown): value is string {
+  return typeof value === 'string' && OPERATION_ID.test(value);
+}
 
 // Builds a fresh row from known fields only, so nothing outside the schema is ever
 // stored. An invalid row yields undefined and is dropped on its own. A hostname is
@@ -281,6 +295,9 @@ export function createChromeStorageArea(area: chrome.storage.StorageArea): Stora
     },
     async set(key, value) {
       await area.set({ [key]: value });
+    },
+    async remove(key) {
+      await area.remove(key);
     },
   };
 }
