@@ -74,11 +74,11 @@ export function blockedNote(reason: BlockedReason): string {
 }
 
 /**
- * A result, plus the two things the domain type cannot carry:
- * `newTabId` is present only when Chrome actually minted a different id, and `cause`
- * only when the tab was held because a read failed rather than because of policy.
+ * A domain `UnloadResult` (which carries `newTabId`), plus the one thing only this
+ * component knows: `cause` is set when the tab was held because a read failed rather
+ * than because of policy, so a failure is never read back as a policy decision.
  */
-export type ExecutedResult = UnloadResult & { newTabId?: number; cause?: SkipCause };
+export type ExecutedResult = UnloadResult & { cause?: SkipCause };
 
 export type Preview = {
   operationId: string; mode: EligibilityMode; scope: Scope;
@@ -369,9 +369,10 @@ export function createExecutor(deps: {
     try {
       config = await settings.read();
     } catch {
-      // Cannot verify, so do not act. STARTUP_GRACE is the vocabulary's holding reason;
-      // `cause` carries what actually failed so this is never read as a policy decision.
-      return asResult({ tabId, outcome: 'skipped', reason: 'STARTUP_GRACE', cause: 'settings-unreadable' });
+      // Cannot verify, so do not act: proceeding on settings we failed to read could
+      // unload a site the owner protected. VERIFY_FAILED says that to the owner without
+      // asserting anything about the tab; `cause` says which read failed.
+      return asResult({ tabId, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'settings-unreadable' });
     }
     if (trigger === 'automatic' && !config.automationEnabled) return { kind: 'automation-off' };
 
@@ -387,7 +388,9 @@ export function createExecutor(deps: {
     try {
       activity = (await tracker.snapshot())[tabId] ?? null;
     } catch {
-      return asResult({ tabId, outcome: 'skipped', reason: 'STARTUP_GRACE', cause: 'activity-unreadable' });
+      // Same ruling: "Keep loaded" lives in the activity record, so an unreadable one
+      // could otherwise unload a tab the owner pinned open.
+      return asResult({ tabId, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'activity-unreadable' });
     }
 
     const decision = decide({

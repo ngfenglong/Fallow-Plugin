@@ -27,7 +27,13 @@ export type Decision = { eligible: boolean; reasons: ReasonCode[]; evaluatedAt: 
 // 'unknown' is deliberate: a service worker killed mid-operation reports that it
 // does not know what happened to a tab, rather than guessing 'confirmed' or 'failed'.
 export type UnloadOutcome = 'confirmed' | 'already-unloaded' | 'skipped' | 'failed' | 'unknown';
-export type UnloadResult = { tabId: number; outcome: UnloadOutcome; reason?: ReasonCode };
+// `tabId` is always the REQUESTED id: what the owner's action referenced and what the
+// preview showed. A discard mints a new id (milestone 0), so when the browser returned a
+// different one it travels separately in `newTabId`, which is absent when the id did not
+// change. Never re-read a tab by the id you asked to discard.
+export type UnloadResult = {
+  tabId: number; outcome: UnloadOutcome; reason?: ReasonCode; newTabId?: number;
+};
 export type Trigger = 'manual-single' | 'manual-bulk' | 'automatic' | 'external';
 
 // Defined here, not in Task 15, because Task 13's message union references it.

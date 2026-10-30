@@ -173,7 +173,7 @@ describe('executor: revalidation races', () => {
     expect(fake.calls.discard).toBe(1);
     const after = r.results.filter((x) => x.cause === 'settings-unreadable');
     expect(after.map((x) => x.tabId)).toEqual([3, 4, 5]);
-    expect(after.every((x) => x.outcome === 'skipped' && x.reason !== undefined)).toBe(true);
+    expect(after.every((x) => x.outcome === 'skipped' && x.reason === 'VERIFY_FAILED')).toBe(true);
     expectCountersSum(r);
   });
 

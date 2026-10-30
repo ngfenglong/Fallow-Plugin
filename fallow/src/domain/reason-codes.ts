@@ -13,6 +13,10 @@ export const REASON_CODES = [
   'USED_RECENTLY',
   'NOT_OLD_ENOUGH',
   'STARTUP_GRACE',
+  // A read Fallow needed (settings, or a tab's activity record) failed, so eligibility
+  // could not be established and the tab was left alone. Transient, and about Fallow
+  // rather than the tab, so it sits with the other holding reasons and is NOT protection.
+  'VERIFY_FAILED',
   'UNSUPPORTED_URL',
   'ALREADY_UNLOADED',
   'TAB_GONE',
@@ -34,6 +38,7 @@ const LABELS: Record<ReasonCode, string> = {
   USED_RECENTLY: 'Used just now',
   NOT_OLD_ENOUGH: 'Not unused long enough yet',
   STARTUP_GRACE: 'Brief pause after startup or a settings change',
+  VERIFY_FAILED: 'Could not check this tab just now',
   UNSUPPORTED_URL: 'Not an http or https page',
   ALREADY_UNLOADED: 'Already unloaded',
   TAB_GONE: 'Tab no longer exists',

@@ -13,7 +13,7 @@ import {
 import { DEFAULT_SETTINGS } from '../../src/domain/settings';
 import { DISCARD_CONFIRM_TIMEOUT_MS } from '../../src/domain/constants';
 import type { Trigger, UnloadOutcome } from '../../src/domain/types';
-import type { ReasonCode } from '../../src/domain/reason-codes';
+import { reasonLabel, type ReasonCode } from '../../src/domain/reason-codes';
 import { createFakeChrome, type FakeChrome, type FakeTab } from '../fake-chrome';
 import { createFakeStorage, type FakeStorage } from '../fake-storage';
 
@@ -431,9 +431,15 @@ describe('executor: settings defaults are never mistaken for the owner settings'
     await seed(baseTabs());
     storage.local.rejectOn.set(`get:${KEYS.settings}`, new Error('storage unavailable'));
     const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
-    expect(r.results[0]).toMatchObject({ tabId: 2, outcome: 'skipped', cause: 'settings-unreadable' });
-    expect(r.results[0]!.reason).toBeDefined();
+    // The owner is told Fallow could not check, not something untrue about the tab.
+    expect(r.results[0]).toEqual({
+      tabId: 2, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'settings-unreadable',
+    });
+    expect(reasonLabel('VERIFY_FAILED')).toBe('Could not check this tab just now');
     expect(fake.calls.discard).toBe(0);
+    // And the code survives a round trip through history, which drops any reason it
+    // does not recognise: a dropped reason would make the row read as "no reason given".
+    expect((await repos.history.read())[0]).toMatchObject({ sessionTabId: 2, reason: 'VERIFY_FAILED' });
     expectCountersSum(r);
   });
 
@@ -441,7 +447,9 @@ describe('executor: settings defaults are never mistaken for the owner settings'
     await seed(baseTabs());
     storage.session.rejectOn.set(`get:${KEYS.activity}`, new Error('storage unavailable'));
     const r = await executor.execute({ kind: 'tab', tabId: 2 }, 'manual-single', 'manual-single', NOW);
-    expect(r.results[0]).toMatchObject({ tabId: 2, outcome: 'skipped', cause: 'activity-unreadable' });
+    expect(r.results[0]).toEqual({
+      tabId: 2, outcome: 'skipped', reason: 'VERIFY_FAILED', cause: 'activity-unreadable',
+    });
     expect(fake.calls.discard).toBe(0);
   });
 });

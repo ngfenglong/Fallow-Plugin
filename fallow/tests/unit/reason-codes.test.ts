@@ -5,8 +5,18 @@ describe('reason codes', () => {
     expect([...REASON_CODES].sort()).toEqual([
       'ALREADY_UNLOADED','API_REJECTED','AUDIBLE','BROWSER_PROTECTED','DASHBOARD_ORIGIN',
       'LOADING','NOT_OLD_ENOUGH','PINNED','SELECTED','SITE_PROTECTED','STARTUP_GRACE',
-      'TAB_GONE','TAB_PROTECTED','UNSUPPORTED_URL','USED_RECENTLY',
+      'TAB_GONE','TAB_PROTECTED','UNSUPPORTED_URL','USED_RECENTLY','VERIFY_FAILED',
     ]);
+  });
+
+  // The executor records this when a read it needed failed, so the owner is told Fallow
+  // could not check rather than something untrue about their tab.
+  it('places VERIFY_FAILED among the transient holding reasons', () => {
+    expect(reasonLabel('VERIFY_FAILED')).toBe('Could not check this tab just now');
+    expect(REASON_CODES.indexOf('VERIFY_FAILED')).toBe(REASON_CODES.indexOf('STARTUP_GRACE') + 1);
+    expect(REASON_CODES.indexOf('VERIFY_FAILED')).toBeLessThan(REASON_CODES.indexOf('UNSUPPORTED_URL'));
+    expect(sortReasons(['UNSUPPORTED_URL', 'VERIFY_FAILED', 'STARTUP_GRACE']))
+      .toEqual(['STARTUP_GRACE', 'VERIFY_FAILED', 'UNSUPPORTED_URL']);
   });
 
   it('gives every reason code owner-facing text with no forbidden words', () => {

@@ -58,6 +58,8 @@ export type Inventory = { capture(now: number): Promise<Snapshot> };
 
 // Reasons that mean "something protects this tab". Timing (USED_RECENTLY, NOT_OLD_ENOUGH,
 // STARTUP_GRACE), scope (UNSUPPORTED_URL) and state (ALREADY_UNLOADED) are not protection.
+// VERIFY_FAILED is deliberately absent too: it is Fallow failing to check, not the owner
+// or the browser protecting the tab, and counting it would overstate Protected.
 const PROTECTION: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
   'SELECTED', 'AUDIBLE', 'LOADING', 'TAB_PROTECTED', 'SITE_PROTECTED', 'PINNED',
   'BROWSER_PROTECTED', 'DASHBOARD_ORIGIN',
