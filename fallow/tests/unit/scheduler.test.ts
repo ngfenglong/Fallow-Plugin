@@ -277,6 +277,32 @@ describe('scheduler: batch size and concurrency', () => {
     storage.local.rejectOn.clear();
     expect((await scheduler.onAlarm(ALARM_NAME, NOW + 60_000))!.requested).toBe(5);
   });
+
+  it('releases the in-flight guard when the batch itself rejects', async () => {
+    // The test above does NOT cover this: a failed settings read is caught inside the run
+    // and becomes null, so the promise resolves. Only a rejecting `execute` leaves a
+    // REJECTED promise in the guard — and releasing with `.then` instead of `.finally`
+    // would hand every later alarm that same rejection, leaving automation dead until the
+    // worker restarts with nothing shown to the owner.
+    await seed(manyIdleTabs(5));
+    let attempts = 0;
+    const flaky: Executor = {
+      ...executor,
+      execute: (scope, mode, trigger, at, operationId) => {
+        attempts += 1;
+        if (attempts === 1) return Promise.reject(new Error('batch record write failed'));
+        return executor.execute(scope, mode, trigger, at, operationId);
+      },
+    };
+    const s = createScheduler({
+      adapter, executor: flaky, settings: repos.settings, session: repos.session, inventory,
+    });
+
+    await s.onAlarm(ALARM_NAME, NOW).then(() => null, () => null);
+    const second = await s.onAlarm(ALARM_NAME, NOW + 60_000);
+    expect(second!.requested).toBe(5);
+    expect(attempts).toBe(2);
+  });
 });
 
 describe('scheduler: while a manual batch is running', () => {            // case 7
@@ -365,6 +391,14 @@ describe('scheduler: pending count', () => {
     await scheduler.beginGrace(NOW, 'threshold-shortened');
     expect(await scheduler.pendingEligibleCount(NOW)).toBe(2);
     expect(fake.calls.discard).toBe(0);
+  });
+
+  it('counts tabs that are already eligible when no grace is in force', async () => {
+    // Every other count test calls beginGrace first, so tabs only ever reach the count
+    // through the STARTUP_GRACE branch and the `eligible` half is never exercised. Without
+    // this, deleting that half reports 0 pending for tabs that are in fact due.
+    await repos.session.write({ discoveredAt: T0, graceUntil: null });
+    expect(await scheduler.pendingEligibleCount(NOW)).toBe(2);
   });
 
   it('counts only tabs that would be unloaded once the grace ends', async () => {
