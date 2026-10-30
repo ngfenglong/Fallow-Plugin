@@ -392,6 +392,66 @@ describe('isTrustedSender URL hardening', () => {
   });
 });
 
+describe('tab id numeric bounds', () => {
+  // Nothing pinned the SAFE part of Number.isSafeInteger: swapping it for Number.isInteger
+  // failed no test. A tab id past 2**53 cannot round-trip, so two different tabs could
+  // compare equal and an unload could be attributed to the wrong one.
+  const req = (tabId: unknown) => ({
+    type: 'SET_TAB_PROTECTION', requestId: 'a', tabId, isProtected: true,
+  });
+
+  it.each([2 ** 53, 2 ** 53 + 2, 1e21, Number.MAX_VALUE])('refuses an unsafe tab id %p', (tabId) => {
+    expect(parseRequest(req(tabId))).toBe(null);
+  });
+
+  it('accepts the largest safe integer', () => {
+    expect(parseRequest(req(Number.MAX_SAFE_INTEGER))).not.toBe(null);
+  });
+});
+
+describe('isTrustedSender id hardening', () => {
+  // Every case here pairs a bad sender id with a VALID url, so the url half cannot refuse it
+  // first and the id half is the only thing under test. Without these, replacing the id
+  // comparison with startsWith, or with a case-insensitive compare, or dropping it entirely,
+  // left all 182 tests passing. A content script of this same extension carries
+  // sender.id === selfId with a web-page url, so the two halves guard different things and
+  // both have to be pinned.
+  const VALID = 'chrome-extension://me/dashboard/index.html';
+
+  it('refuses a sender id that merely starts with ours', () => {
+    expect(isTrustedSender({ id: 'mex', url: VALID }, 'me')).toBe(false);
+  });
+
+  it('refuses a sender id of which ours is a prefix, reversed', () => {
+    expect(isTrustedSender({ id: 'm', url: VALID }, 'me')).toBe(false);
+  });
+
+  it('refuses a sender id differing only by case', () => {
+    expect(isTrustedSender({ id: 'ME', url: VALID }, 'me')).toBe(false);
+    expect(isTrustedSender({ id: 'Me', url: VALID }, 'me')).toBe(false);
+  });
+
+  it('refuses a wholly different sender id', () => {
+    expect(isTrustedSender({ id: 'someone-else', url: VALID }, 'me')).toBe(false);
+  });
+
+  it('refuses a missing sender id', () => {
+    expect(isTrustedSender({ url: VALID }, 'me')).toBe(false);
+  });
+
+  it('refuses an empty sender id', () => {
+    expect(isTrustedSender({ id: '', url: VALID }, 'me')).toBe(false);
+  });
+
+  it.each(['me/', 'me@', 'me ', ' me', 'me\n'])('refuses a sender id carrying %p', (id) => {
+    expect(isTrustedSender({ id, url: VALID }, 'me')).toBe(false);
+  });
+
+  it('accepts only the exact id with the exact origin', () => {
+    expect(isTrustedSender({ id: 'me', url: VALID }, 'me')).toBe(true);
+  });
+});
+
 describe('parseRequest and isTrustedSender never throw', () => {
   const trap = (): never => { throw new Error('hostile trap'); };
   const throwingProxy = new Proxy({ type: 'GET_SNAPSHOT', requestId: 'a' }, {

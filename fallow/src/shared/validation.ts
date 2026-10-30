@@ -6,7 +6,10 @@ import type { EligibilityMode } from '../domain/eligibility';
 import type { MemorySample } from '../domain/types';
 import { isStorableOperationId } from '../platform/storage';
 
-const MODES: readonly string[] = ['auto', 'manual-bulk', 'manual-single'];
+// Typed, not readonly string[]: an untyped copy of the literals lets the mode list drift
+// away from EligibilityMode with the compiler saying nothing. This project has been bitten
+// repeatedly by one rule defined twice.
+const MODES: readonly EligibilityMode[] = ['auto', 'manual-bulk', 'manual-single'];
 
 /** Longest requestId accepted. It is echoed in every Response, so it is bounded. */
 export const MAX_REQUEST_ID_LENGTH = 128;
@@ -126,9 +129,13 @@ function parseScope(raw: unknown): Scope {
   }
 }
 
+function isMode(value: string): value is EligibilityMode {
+  return (MODES as readonly string[]).includes(value);
+}
+
 function parseMode(value: unknown): EligibilityMode {
-  if (typeof value !== 'string' || !MODES.includes(value)) refuse();
-  return value as EligibilityMode;
+  if (typeof value !== 'string' || !isMode(value)) refuse();
+  return value;
 }
 
 /**
