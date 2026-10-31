@@ -480,6 +480,9 @@ describe('theme tokens (plan section 6: dark mode, 4.5:1 text, visible focus)', 
 
 describe('the ui layer reaches background/ only through type-only imports', () => {
   // A value import would pull the worker's module (and its chrome.* listeners) into the page.
+  // Parsed with the real TypeScript compiler, not a line-by-line regex: a regex scan missed
+  // a bare side-effect import (`import '../background/x'`, no `from` token at all) and a
+  // dynamic import (`import('../background/x')`), neither of which a bundler can erase.
   function listSource(dir: string): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const full = join(dir, e.name);
@@ -487,15 +490,77 @@ describe('the ui layer reaches background/ only through type-only imports', () =
       return /\.tsx?$/.test(e.name) ? [full] : [];
     });
   }
+
+  /**
+   * The import/export/dynamic-import statements this source references as a VALUE from a
+   * path containing `needle`. Whole statements, not lines: a per-line scan previously missed
+   * a bare side-effect import (`import '...'`, no `from` token) and a dynamic import
+   * (`import('...')`), neither of which a bundler can erase — and would have false-positived
+   * on a type-only import split across multiple lines.
+   *
+   * TypeScript 7's package exports only a version stub from its main entry; the classic
+   * createSourceFile/AST API lives under `typescript/unstable/*`, explicitly marked unstable
+   * in this version. Rather than depend on that, each statement is matched as a whole unit
+   * (so embedded newlines don't matter) and classified by its own text.
+   */
+  function unsafeImportsOf(sourceText: string, needle: string): string[] {
+    const hits: string[] = [];
+    // import/export ... ; as one unit, but never one that is itself a dynamic import call
+    // (handled separately below, since it has no semicolon-terminated "clause" shape).
+    const stmtRe = /\b(?:import|export)\b(?!\s*\()[^;]*?;/gs;
+    for (const m of sourceText.matchAll(stmtRe)) {
+      const stmt = m[0];
+      if (stmt.includes(needle) && !isTypeOnlyStatement(stmt)) hits.push(stmt);
+    }
+    // A dynamic import('...') has no type-only form at all; it always loads the module.
+    const dynRe = /\bimport\s*\(\s*(['"])((?:(?!\1)[^\\]|\\.)*)\1\s*\)/g;
+    for (const m of sourceText.matchAll(dynRe)) {
+      if (m[2]!.includes(needle)) hits.push(m[0]);
+    }
+    return hits;
+  }
+
+  function isTypeOnlyStatement(stmt: string): boolean {
+    const trimmed = stmt.trim();
+    // The whole clause is type-only: `import type ... from '...'` / `export type { ... } from '...'`.
+    if (/^(import|export)\s+type\b/.test(trimmed)) return true;
+    // No braces at all: a bare side-effect import, a default import, or a namespace import.
+    // None of those have a type-only spelling, so nothing further to check — not type-only.
+    const braceMatch = trimmed.match(/\{([^}]*)\}/s);
+    if (!braceMatch) return false;
+    // A default binding alongside the braces (`import Default, { ... } from '...'`) is
+    // always a value load regardless of what the braces contain.
+    if (/^import\s+(?!type\b)[A-Za-z_$][\w$]*\s*,/.test(trimmed)) return false;
+    const names = braceMatch[1]!.split(',').map((s) => s.trim()).filter(Boolean);
+    return names.length > 0 && names.every((n) => /^type\s+/.test(n));
+  }
+
+  it.each([
+    ['a type-only named import', "import type { X } from '../background/x';", []],
+    ['a type-only brace import', "import { type X } from '../background/x';", []],
+    ['a type-only export', "export type { X } from '../background/x';", []],
+    ['a multi-line type-only import', "import type {\n  X,\n  Y,\n} from '../background/x';", []],
+    ['an unrelated path', "import { X } from '../domain/x';", []],
+    ['a string that merely contains the word, not an import', "const s = 'background/foo';", []],
+    ['a default import', "import X from '../background/x';", ["import X from '../background/x';"]],
+    ['a bare side-effect import', "import '../background/x';", ["import '../background/x';"]],
+    ['a dynamic import', "const p = import('../background/x');", ["import('../background/x')"]],
+    ['a mixed type-and-value brace import', "import { type X, Y } from '../background/x';",
+      ["import { type X, Y } from '../background/x';"]],
+    ['a namespace import', "import * as X from '../background/x';", ["import * as X from '../background/x';"]],
+    ['a value export', "export { X } from '../background/x';", ["export { X } from '../background/x';"]],
+  ])('recognises %s', (_label, source, expected) => {
+    expect(unsafeImportsOf(source, 'background/')).toEqual(expected);
+  });
+
   it('has no value import from src/background anywhere under src/ui', () => {
     const uiRoot = join(import.meta.dirname, '../../src/ui');
     const files = listSource(uiRoot);
     expect(files.length).toBeGreaterThan(0);
     const valueImports = files.flatMap((file) => {
       const text = readFileSync(file, 'utf8');
-      return text.split('\n')
-        .filter((line) => /\bfrom\s+['"][^'"]*background\//.test(line) && !/^\s*(import|export)\s+type\b/.test(line))
-        .map((line) => `${relative(uiRoot, file).split(sep).join('/')}: ${line.trim()}`);
+      return unsafeImportsOf(text, 'background/')
+        .map((snippet) => `${relative(uiRoot, file).split(sep).join('/')}: ${snippet}`);
     });
     expect(valueImports).toEqual([]);
   });
