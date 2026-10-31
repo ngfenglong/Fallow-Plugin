@@ -19,3 +19,12 @@ export type Request =
 export type Response<T> =
   | { ok: true; requestId: string; data: T }
   | { ok: false; requestId: string; error: string };
+
+/**
+ * Pushed to open extension pages when what they show may have changed; a page refreshes
+ * by asking for a snapshot. Carries no data. Lives here, not in background/index.ts: a UI
+ * page may import a type from there, erased at build time, but importing a runtime VALUE
+ * would pull in that module's side effects — constructing the worker and registering all
+ * 15 chrome.* listeners a second time, inside the page.
+ */
+export const STATE_CHANGED_MESSAGE = { type: 'FALLOW_STATE_CHANGED' } as const;

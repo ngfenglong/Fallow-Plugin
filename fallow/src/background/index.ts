@@ -17,7 +17,7 @@ import { createOrigins, type Origins } from './origins';
 import { hostnameOf } from '../domain/hostname';
 import { applySettingsPatch } from '../domain/settings';
 import type { Settings } from '../domain/types';
-import type { Request, Response } from '../shared/messages';
+import { STATE_CHANGED_MESSAGE, type Request, type Response } from '../shared/messages';
 import { isTrustedSender, MAX_REQUEST_ID_LENGTH, parseRequest } from '../shared/validation';
 
 /**
@@ -34,13 +34,6 @@ export const EXTERNAL_OPERATION_ID = 'external';
  * operation would hide a genuinely external unload of the same tab later on.
  */
 export const CLAIM_TTL_MS = 30_000;
-
-/**
- * Sent to open extension pages when what they show may have changed; they refresh by asking
- * for a snapshot. It carries no data. NOT in shared/messages.ts, which this task may not
- * edit: Task 16's useSnapshot needs it moved there (reported).
- */
-export const STATE_CHANGED_MESSAGE = { type: 'FALLOW_STATE_CHANGED' } as const;
 
 /** A burst of events (a window of tabs closing, a page loading) becomes one notice. */
 export const NOTIFY_DELAY_MS = 100;
