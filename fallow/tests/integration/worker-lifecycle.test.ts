@@ -730,6 +730,43 @@ describe('worker lifecycle: A12 external attribution', () => {
     expect(await externalRows()).toEqual([]);
   });
 
+  it('does not misattribute a renamed tab once CLAIM_TTL_MS has passed before its OWN batch settles', async () => {
+    // The rename record for an early tab in a slow multi-tab batch is timestamped when
+    // onReplaced fires for THAT tab, not when the batch as a whole finishes. If the batch
+    // takes longer than CLAIM_TTL_MS to settle — plausible for an uncapped manual-bulk
+    // scope with several tabs, each confirmed in its own backoff loop — the early tab's
+    // rename record must not be pruned before recordExternalUnload finally gets to check
+    // it, which only happens once every in-flight operation has resolved.
+    const mod = await startWorker();
+    clock += 2 * MIN; // past the one-minute bulk floor
+    fake.discardBehaviour = 'resolve-without-id';
+    // 'before-resolve': tab 2's onReplaced/onUpdated pair fires synchronously, right as its
+    // own discard call resolves — well BEFORE tab 4 is even attempted — so renamedFrom for
+    // tab 2's new id is written at the clock's ORIGINAL value, not the jumped one.
+    fake.discardEventTiming = 'before-resolve';
+    // Suspend tab 4's discard call entirely: the whole operation cannot settle until this
+    // resolves, which is exactly the window a slow/large batch would occupy in production.
+    let releaseTab4: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { releaseTab4 = resolve; });
+    fake.onBeforeDiscard = (_id, n) => (n === 2 ? held : undefined);
+
+    const fired = fireMessage({ type: 'UNLOAD_EXECUTE', requestId: 'a', scope: { kind: 'tabs', tabIds: [2, 4] }, mode: 'manual-bulk' });
+    // Give tab 2's synchronous rename+event pair, and tab 4's suspension, time to land.
+    await new Promise((r) => setTimeout(r, 0));
+    // Only now, with tab 2 already renamed and its externally-looking onUpdated already
+    // queued behind Promise.allSettled(inFlight), does CLAIM_TTL_MS elapse.
+    clock += mod.CLAIM_TTL_MS + 1_000;
+    releaseTab4();
+    const res = await fired;
+    await fake.idle();
+
+    expect(res.data.confirmed + res.data.unknown).toBe(2);
+    expect(await externalRows()).toEqual([]);
+    const rows = await repos().history.read();
+    expect(rows.filter((r) => r.operationId === mod.EXTERNAL_OPERATION_ID)).toEqual([]);
+    expect(rows.map((r) => r.sessionTabId).sort()).toEqual([2, 4]);
+  });
+
   it('logs a tab Chrome unloads while a Fallow batch is running on other tabs', async () => {
     await startWorker();
     fake.discardEventTiming = 'before-resolve';

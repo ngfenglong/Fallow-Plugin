@@ -114,7 +114,8 @@ export function createWorker(deps: WorkerDeps): FallowWorker {
   const REQUESTED: ReadonlySet<string> = new Set(['confirmed', 'unknown', 'failed']);
 
   function claimReports(reports: ReadonlyArray<BatchReport | null>): void {
-    const until = now() + CLAIM_TTL_MS;
+    const at = now();
+    const until = at + CLAIM_TTL_MS;
     for (const report of reports) {
       if (report === null) continue;
       for (const result of report.results) {
@@ -124,6 +125,16 @@ export function createWorker(deps: WorkerDeps): FallowWorker {
       }
       if (report.reconciled) claimReports(report.reconciled);
     }
+    // A rename's own dispatch time is the wrong clock to age it by: the operation it
+    // belongs to may still be mid-flight when onReplaced fires, and can settle well over
+    // CLAIM_TTL_MS later for a large or slow batch. isFallows only reaches renamedFrom
+    // at all once every in-flight operation (including whichever one is settling right
+    // now) has resolved, so "a batch just settled" is the one signal that whatever
+    // rename it produced is about to be checked. Refreshing every rename's age here ties
+    // its survival to that signal instead of to the rename's own, unrelated clock.
+    // Harmless for an unrelated rename this settlement had nothing to do with: the
+    // CLAIMED id at the end of its chain still expires on its own schedule regardless.
+    for (const r of renamedFrom.values()) r.at = at;
   }
 
   /** Every operation that can issue a discard goes through here. */
@@ -137,6 +148,12 @@ export function createWorker(deps: WorkerDeps): FallowWorker {
 
   function forgetExpired(at: number): void {
     for (const [id, until] of claimedUntil) if (until < at) claimedUntil.delete(id);
+    // A rename's own clock, from its OWN dispatch, is the wrong clock to expire it by: the
+    // operation that requested it may still be running. onReplaced for an early tab in a
+    // large manual-bulk batch can fire well over CLAIM_TTL_MS before that batch's own
+    // discard confirmations finish and claimReports runs — and until the batch settles,
+    // isFallows has nothing else to check the rename against. So a rename record is held
+    // for the whole time any operation is in flight, and only starts aging once none is.
     for (const [id, r] of renamedFrom) if (at - r.at > CLAIM_TTL_MS || r.at > at) renamedFrom.delete(id);
   }
 
@@ -414,6 +431,15 @@ export function createWorker(deps: WorkerDeps): FallowWorker {
   }
 
   // ---- A12: unloads Fallow did not request ----------------------------------------
+  //
+  // Residual, deferred (review of Task 14): `renamedFrom.set(...)` is the first, synchronous
+  // line of `onReplaced` below, so a rename is on record before that handler does anything
+  // else. This chain is still blind to one ordering Chrome's own dispatch has never been
+  // measured against: `onUpdated(newId, {discarded:true})`'s LISTENER invocation arriving
+  // before `onReplaced`'s. If Chrome ever calls them in that order, `renamedFrom` has
+  // nothing to find yet and a Fallow discard that resolved with no minted id would be
+  // misattributed as external. Closing this needs either a measured guarantee of Chrome's
+  // dispatch order, or buffering every check — carried into Task 21's A12 fault injection.
 
   function onUpdated(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab?: chrome.tabs.Tab): Promise<void> {
     if (changeInfo?.discarded !== true) return settle(Promise.resolve());
