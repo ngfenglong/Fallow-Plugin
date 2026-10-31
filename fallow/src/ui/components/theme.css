@@ -1,0 +1,109 @@
+/* Shared tokens for every Fallow page. Light is the default; dark follows the system
+   preference (plan section 6). Every text pair is at least 4.5:1, the focus ring 3:1. */
+:root {
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-text: #1b1f24;
+  --color-text-muted: #4b5563;
+  --color-border: #c9ced6;
+  --color-focus: #1d4ed8;
+  --color-neutral-bg: #e5e7eb;
+  --color-neutral-fg: #1f2937;
+  --color-info-bg: #dbeafe;
+  --color-info-fg: #1e3a8a;
+  --color-ok-bg: #dcfce7;
+  --color-ok-fg: #14532d;
+  --color-warn-bg: #fef3c7;
+  --color-warn-fg: #78350f;
+  --color-danger-bg: #fee2e2;
+  --color-danger-fg: #7f1d1d;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #111318;
+    --color-surface: #1a1d24;
+    --color-text: #e6e8eb;
+    --color-text-muted: #aab2bd;
+    --color-border: #3a404b;
+    --color-focus: #8ab4ff;
+    --color-neutral-bg: #2d3440;
+    --color-neutral-fg: #e5e7eb;
+    --color-info-bg: #1e3a5f;
+    --color-info-fg: #bfdbfe;
+    --color-ok-bg: #14532d;
+    --color-ok-fg: #bbf7d0;
+    --color-warn-bg: #78350f;
+    --color-warn-fg: #fde68a;
+    --color-danger-bg: #7f1d1d;
+    --color-danger-fg: #fecaca;
+    color-scheme: dark;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.badge-neutral { background: var(--color-neutral-bg); color: var(--color-neutral-fg); }
+.badge-info { background: var(--color-info-bg); color: var(--color-info-fg); }
+.badge-ok { background: var(--color-ok-bg); color: var(--color-ok-fg); }
+.badge-warn { background: var(--color-warn-bg); color: var(--color-warn-fg); }
+.badge-danger { background: var(--color-danger-bg); color: var(--color-danger-fg); }
+
+.btn {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.btn-primary { background: var(--color-focus); border-color: var(--color-focus); color: var(--color-surface); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.switch-row { display: inline-flex; align-items: center; gap: 10px; }
+.switch {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--color-border); border-radius: 999px;
+  background: var(--color-surface); color: var(--color-text);
+  padding: 2px 8px 2px 2px; font: inherit; cursor: pointer;
+}
+.switch[aria-checked='true'] .switch-track { background: var(--color-focus); }
+.switch-track {
+  width: 28px; height: 16px; border-radius: 999px; background: var(--color-border);
+  position: relative;
+}
+.switch:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.table { border-collapse: collapse; width: 100%; background: var(--color-surface); }
+.table th, .table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+.table th { color: var(--color-text-muted); font-weight: 600; }
+
+.panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+.panel-title { font-size: 15px; margin: 0 0 8px; }
+
+.empty-state { padding: 24px 16px; color: var(--color-text-muted); text-align: center; }
+.empty-title { margin: 0; font-weight: 600; color: var(--color-text); }
+
+.error-state { border: 1px solid var(--color-danger-fg); background: var(--color-danger-bg); color: var(--color-danger-fg); border-radius: 8px; padding: 12px 16px; }
+.error-state p { margin: 4px 0; }
+.error-title { font-weight: 600; }
