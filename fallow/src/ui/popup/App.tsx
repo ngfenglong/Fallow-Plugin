@@ -173,6 +173,27 @@ export function App() {
     }
   }
 
+  // Same origin-tab lookup as handleOpenDashboard, just landing on the dashboard's settings
+  // panel instead of its top (Task 2: the settings panel had no findable entry point).
+  async function handleOpenSettings() {
+    let originTabId: number | null = null;
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const id = tabs[0]?.id;
+      if (typeof id === 'number') originTabId = id;
+    } catch {
+      originTabId = null;
+    }
+    const base = chrome.runtime.getURL('dashboard/index.html');
+    const url = originTabId !== null ? `${base}?originTabId=${originTabId}#settings` : `${base}#settings`;
+    try {
+      chrome.tabs.create({ url });
+    } catch {
+      // Nothing more this popup can do if Chrome refuses to open a tab; no tab of the
+      // owner's was touched, so there is nothing to roll back.
+    }
+  }
+
   if (state === 'loading') {
     return (
       <main className="popup">
@@ -264,6 +285,7 @@ export function App() {
       )}
       <div className="popup-footer">
         <Button onClick={handleOpenDashboard}>Open dashboard</Button>
+        <Button onClick={handleOpenSettings}>Settings</Button>
       </div>
       {announcement !== null ? (
         <p role={announcement.tone === 'alert' ? 'alert' : 'status'} aria-live={announcement.tone === 'alert' ? 'assertive' : 'polite'}>

@@ -635,6 +635,27 @@ describe('bulk action: recovering from a blocked preview', () => {
 
 // ---- Settings: an editable, explained idle threshold -------------------------------
 
+describe('Header: settings link', () => {
+  it('links the header to the settings panel by id', async () => {
+    render(<App />);
+    const link = await screen.findByRole('link', { name: /settings/i });
+    expect(link.getAttribute('href')).toBe('#settings');
+    expect(document.getElementById('settings')).toBeTruthy();
+  });
+
+  // Review Focus: absence of #settings must change nothing.
+  it('renders the same as always when opened with no #settings fragment', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [1] })],
+      rows: [rowFixture({ tabId: 1 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('count-total')).toHaveTextContent('1'));
+    expect(window.location.hash).toBe('');
+  });
+});
+
 describe('SettingsPanel: editable threshold', () => {
   it('sends a threshold patch when a valid value is committed', async () => {
     snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });

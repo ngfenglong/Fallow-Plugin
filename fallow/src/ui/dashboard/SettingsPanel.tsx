@@ -12,7 +12,7 @@ import { sendRequest } from '../client';
  */
 export function SettingsPanel({ settings }: { settings: Settings }) {
   return (
-    <Panel title="Settings">
+    <Panel title="Settings" id="settings">
       <Switch
         label="Automatic unloading"
         checked={settings.automationEnabled}

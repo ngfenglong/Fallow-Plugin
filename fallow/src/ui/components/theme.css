@@ -145,7 +145,17 @@ body {
   flex-direction: column;
   gap: 16px;
 }
+.dashboard-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
 .dashboard-header h1 { font-size: 18px; margin: 0; }
+/* The automation-off note, when present, is the header's third child but should read as a
+   line of its own below the title/link row, not squeeze onto it. */
+.dashboard-header p { flex-basis: 100%; margin: 0; }
 
 .scroll-area {
   max-height: 480px;

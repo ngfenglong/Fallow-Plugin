@@ -398,6 +398,14 @@ describe('popup: chrome.tabs.query({active:true,currentWindow:true}) can genuine
   });
 });
 
+describe('popup: Settings button', () => {
+  it('opens the dashboard scrolled to settings from the Settings button', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /^settings$/i }));
+    await waitFor(() => expect(fake.lastCreatedUrl).toMatch(/dashboard\/index\.html\?originTabId=7#settings$/));
+  });
+});
+
 describe('popup: the document can be torn down mid-request (risk 7)', () => {
   it('does not write to state, warn, or throw when UNLOAD_PREVIEW resolves after unmount', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
