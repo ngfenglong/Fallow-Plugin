@@ -110,3 +110,6 @@ tmp/
 
 # ---- Superpowers SDD scratch (ledger, briefs, review packages) ----
 .superpowers/
+
+# ---- Git worktrees for isolated feature work ----
+.worktrees/
