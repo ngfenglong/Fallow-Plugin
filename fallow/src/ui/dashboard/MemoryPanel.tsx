@@ -48,6 +48,14 @@ export function MemoryPanel({
     };
   }, [enabled, provider]);
 
+  // "Available" follows the same reading "Freed" is computed from, so a new complete delta
+  // moves it on, not just the reading taken on mount/enable.
+  useEffect(() => {
+    if (delta !== null && delta.status === 'complete') {
+      setAvailableBytes(delta.after!.availableBytes);
+    }
+  }, [delta]);
+
   if (!enabled) return null;
 
   async function handleEnablePermission() {
@@ -70,11 +78,18 @@ export function MemoryPanel({
           applications and OS caching can affect this measurement.
         </p>
         <p>
-          Available: <span data-testid="memory-available">{formatBytes(status === 'available' ? availableBytes : null)}</span>
+          Available: <span data-testid="memory-available">{formatBytes(availableBytes)}</span>
         </p>
         {delta !== null && delta.status === 'complete' ? (
           <p>
-            Freed: <span data-testid="memory-freed">{formatDelta(delta.deltaBytes)}</span>
+            Freed:{' '}
+            {delta.deltaBytes !== null && delta.deltaBytes < 0 ? (
+              <span data-testid="memory-freed">
+                little or none — device memory moved up slightly during the reading
+              </span>
+            ) : (
+              <span data-testid="memory-freed">{formatDelta(delta.deltaBytes)}</span>
+            )}
           </p>
         ) : null}
         <p>A reading for just Chrome&apos;s own usage is planned for a later update.</p>

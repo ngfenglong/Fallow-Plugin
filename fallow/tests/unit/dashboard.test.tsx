@@ -928,3 +928,37 @@ describe('MemoryPanel: a freed reading', () => {
     expect(screen.queryByTestId('memory-freed')).not.toBeInTheDocument();
   });
 });
+
+describe('MemoryPanel: Available and Freed stay honest (Task 1)', () => {
+  it('updates Available to the after-sample once a complete delta arrives', async () => {
+    const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 4 * 1024 ** 3 };
+    const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 6 * 1024 ** 3 };
+    const delta = summariseBeforeAfter(before, after);
+    const { rerender } = render(<MemoryPanel enabled provider={stubProvider([])} delta={null} />);
+    rerender(<MemoryPanel enabled provider={stubProvider([])} delta={delta} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent('6.0 GiB'));
+  });
+
+  it('shows a reassuring note instead of a negative figure when the device reading moved the wrong way', async () => {
+    const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 6 * 1024 ** 3 };
+    const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 5 * 1024 ** 3 };
+    render(<MemoryPanel enabled provider={stubProvider([])} delta={summariseBeforeAfter(before, after)} />);
+    expect(await screen.findByTestId('memory-freed')).toHaveTextContent(/little or none/i);
+  });
+});
+
+describe('TabTable: memory deltas are tagged by operation (Task 1)', () => {
+  it('tags a memory delta with the operationId of the action that produced it', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+      settings: defaultSettings({ deviceMemoryMonitoringEnabled: true }),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await waitFor(() => expect(fake.lastRequest).toMatchObject({ type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId: 5 } }));
+    expect(fake.lastRequest.operationId).toMatch(/^tab-5-/);
+  });
+});

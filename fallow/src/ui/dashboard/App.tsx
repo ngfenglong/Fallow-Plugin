@@ -167,7 +167,9 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   const [filter, setFilter] = useState<FilterKey>('all');
   const [bulk, setBulk] = useState<Bulk>({ step: 'idle' });
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
-  const [memoryDelta, setMemoryDelta] = useState<BeforeAfter | null>(null);
+  // Tagged with the operationId of the request that produced it, so a reading always says
+  // which action it describes when unloads overlap (most recent still wins).
+  const [memoryDelta, setMemoryDelta] = useState<{ operationId: string; delta: BeforeAfter } | null>(null);
 
   // Same unmount/double-submit guards as the popup (App.tsx there); see its comment for why
   // both the busy ref AND the mounted ref are needed.
@@ -310,8 +312,9 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       // Fire-and-forget: the announcement and the busy-release below (this try's own
       // `finally`) must never wait on the 10s after-sample. The "Freed" line simply
       // updates whenever this settles, same as any other async UI update.
+      const operationId = preview.operationId;
       void delta.then((d) => {
-        if (mountedRef.current) setMemoryDelta(d);
+        if (mountedRef.current) setMemoryDelta(d === null ? null : { operationId, delta: d });
       });
     } catch {
       if (mountedRef.current) {
@@ -329,6 +332,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   /** The actual per-tab request, shared by the already-acknowledged path and the ack
    *  continuation below -- neither one touches `bulk` itself; only the caller does. */
   async function dispatchUnloadTab(tabId: number) {
+    const operationId = `tab-${tabId}-${Date.now()}`;
     try {
       const { result: report, delta } = await sampleMemoryAround(
         {
@@ -337,7 +341,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
           wait,
         },
         () => sendRequest<BatchReport>({
-          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
+          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single', operationId,
         }),
       );
       if (mountedRef.current) {
@@ -347,7 +351,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       // `unloading` guard, via handleUnloadTab) must be released as soon as `report` is
       // ready, not after the after-sample.
       void delta.then((d) => {
-        if (mountedRef.current) setMemoryDelta(d);
+        if (mountedRef.current) setMemoryDelta(d === null ? null : { operationId, delta: d });
       });
     } catch {
       if (mountedRef.current) {
@@ -464,7 +468,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             </div>
           ) : null}
           <MemoryPanel
-            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta}
+            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta?.delta ?? null}
           />
           <Filters
             search={search} onSearch={setSearch}
