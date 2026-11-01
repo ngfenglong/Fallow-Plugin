@@ -1,0 +1,494 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSnapshot } from '../useSnapshot';
+import { sendRequest } from '../client';
+import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
+import { ErrorState } from '../components/ErrorState';
+import { Header } from './Header';
+import { Summary } from './Summary';
+import { MemoryPanel } from './MemoryPanel';
+import { TabTable } from './TabTable';
+import { Filters, type FilterKey, type SortKey } from './Filters';
+import { SettingsPanel } from './SettingsPanel';
+import {
+  createDeviceMemoryProvider, summariseBeforeAfter,
+  type BeforeAfter, type DeviceMemoryProvider,
+} from '../../platform/memory-provider';
+import { MEMORY_AFTER_DELAY_MS } from '../../domain/constants';
+// Type-only, erased at build time. Task 16's layering guard (tests/unit/ui-components.test.tsx,
+// "the ui layer reaches background/ only through type-only imports") requires every value a
+// UI page takes from the worker's half of the tree to be erased at compile time, never a
+// runtime reference, so the worker's own module -- and its chrome.* listener registration --
+// never ends up inside a UI bundle. That is why BLOCKED_TEXT and PROTECTION_REASONS just
+// below are hand-kept copies of worker-side vocabulary (executor.ts's BLOCKED_NOTES and
+// inventory.ts's PROTECTION set) rather than calls to the functions that define them there:
+// the popup (Task 18) made the same tradeoff for BLOCKED_TEXT; see the task report for the
+// same suggested fix (a side-effect-free shared module in a later task).
+import type { BatchReport, BlockedReason, Preview, Scope } from '../../background/executor';
+import type { TabRow } from '../../background/inventory';
+import type { ReasonCode } from '../../domain/reason-codes';
+
+const ALL_WINDOWS_SCOPE: Scope = { kind: 'all' };
+
+/** The one permitted localStorage key in this codebase (brief Step 3), wrapped in try/catch. */
+const ACK_KEY = 'fallow.bulkAcknowledged';
+
+/**
+ * Verbatim copy of the worker executor's BLOCKED_NOTES. See the layering note above.
+ * Exported so tests/unit/dashboard.test.tsx can assert byte-identical parity against the
+ * real `blockedNote`/`BLOCKED_NOTES` (test files are exempt from the layering guard), the
+ * same way tests/unit/popup.test.tsx already does for the popup's copy.
+ */
+export const BLOCKED_TEXT: Record<BlockedReason, string> = {
+  'tabs-unavailable': 'Could not read the tab list, so nothing was unloaded.',
+  'dashboard-origins-unreadable':
+    'Could not confirm which tab this dashboard was opened from, so nothing was unloaded.',
+  'startup-grace-unreadable': 'Could not read the startup pause, so no automatic unloading ran.',
+  'activity-unreadable': 'Could not read how long these tabs have been unused.',
+  'automation-off': 'Automatic unloading is off.',
+  'crash-record-unreadable': 'An unfinished operation could not be read, so its result is unknown.',
+  'internal-error': 'The operation stopped after an unexpected failure.',
+};
+
+/**
+ * Hand copy of inventory.ts's PROTECTION set, for the "Protected" filter only (see note
+ * above). Exported for the same reason as BLOCKED_TEXT above: so the test file can assert
+ * this stays identical to the real, now-exported `PROTECTION` set in inventory.ts.
+ */
+export const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
+  'SELECTED', 'AUDIBLE', 'LOADING', 'TAB_PROTECTED', 'SITE_PROTECTED', 'PINNED',
+  'BROWSER_PROTECTED', 'DASHBOARD_ORIGIN',
+]);
+
+type Bulk =
+  | { step: 'idle' }
+  | { step: 'ack'; then: () => void }
+  | { step: 'previewing' }
+  | { step: 'ready'; preview: Preview }
+  | { step: 'executing'; preview: Preview }
+  | { step: 'empty' }
+  | { step: 'blocked'; reason: BlockedReason }
+  | { step: 'error' };
+
+type Announcement = { tone: 'status' | 'alert'; text: string };
+
+/** One deterministic sentence per outcome, read by an aria-live region (plan §6). */
+function describeReport(report: BatchReport): Announcement {
+  if (report.blocked !== null) return { tone: 'alert', text: BLOCKED_TEXT[report.blocked] };
+  if (report.cancelled) {
+    return {
+      tone: 'alert',
+      text: `Stopped before finishing. ${report.confirmed} unloaded, ${report.requested - report.confirmed} not yet acted on.`,
+    };
+  }
+  const problems: string[] = [];
+  if (report.alreadyUnloaded > 0) problems.push(`${report.alreadyUnloaded} already unloaded`);
+  if (report.skipped > 0) problems.push(`${report.skipped} skipped`);
+  if (report.failed > 0) problems.push(`${report.failed} failed`);
+  if (report.unknown > 0) problems.push(`${report.unknown} unknown`);
+  const tail = problems.length > 0 ? ` (${problems.join(', ')})` : '';
+  const tone: Announcement['tone'] = report.failed > 0 || report.unknown > 0 ? 'alert' : 'status';
+  return { tone, text: `${report.confirmed} unloaded of ${report.requested} requested${tail}.` };
+}
+
+/** The popup passes this via `?originTabId=<id>` (Task 18's ruling); a direct open has none. */
+function originTabIdFromLocation(): number | null {
+  const raw = new URLSearchParams(window.location.search).get('originTabId');
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) ? n : null;
+}
+
+function hasAcknowledgedBulk(): boolean {
+  try {
+    return window.localStorage.getItem(ACK_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setAcknowledgedBulk(): void {
+  try {
+    window.localStorage.setItem(ACK_KEY, '1');
+  } catch {
+    // Nothing more to do: the owner will just see the warning again next time, which is
+    // the safe direction to fail in.
+  }
+}
+
+/** Defined once, outside the component, so it is not recreated every render. */
+const realWait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A before/after device-memory reading wrapped around an unload action (Task 6). Pure and
+ * dependency-injected -- same seam background/executor.ts already uses for its own `sleep`
+ * -- so it is tested directly, with no fake timers and no real App render. When monitoring
+ * is off, or the capability itself is unavailable, the action still runs but no sampling
+ * happens at all: `delta` resolves to `null` immediately, not a `BeforeAfter` with missing
+ * fields.
+ *
+ * `delta` is a *Promise*, not an already-resolved value (final-review fix): the after
+ * sample waits MEMORY_AFTER_DELAY_MS (10s) behind `deps.wait`, and a caller that only cares
+ * about the unload's own result must never be made to wait on that -- `result` is ready as
+ * soon as `action()` itself resolves. Callers `await` the returned object (which carries
+ * `result` already settled) and separately attach to `delta` for the memory reading
+ * whenever it actually arrives.
+ */
+export async function sampleMemoryAround<T>(
+  deps: { enabled: boolean; provider: DeviceMemoryProvider; wait: (ms: number) => Promise<void> },
+  action: () => Promise<T>,
+): Promise<{ result: T; delta: Promise<BeforeAfter | null> }> {
+  if (!deps.enabled || !(await deps.provider.isAvailable())) {
+    return { result: await action(), delta: Promise.resolve(null) };
+  }
+  const before = await deps.provider.sample();
+  const result = await action();
+  // Deliberately not awaited: this is what lets `result` above reach the caller without
+  // sitting through the 10s after-sample. Neither `deps.wait` nor `provider.sample` ever
+  // throws in the real implementation (realWait never rejects; the provider swallows its
+  // own failures into `null`), so this promise is never left to reject unobserved.
+  const delta = (async (): Promise<BeforeAfter | null> => {
+    await deps.wait(MEMORY_AFTER_DELAY_MS);
+    const after = await deps.provider.sample();
+    return summariseBeforeAfter(before, after);
+  })();
+  return { result, delta };
+}
+
+/**
+ * `wait` defaults to the real timer and is only ever overridden by a test (final-review
+ * fix's own App-level test for the no-10s-stall behaviour below): production always gets
+ * `realWait`, since `main.tsx` renders `<App />` with no props.
+ */
+export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> } = {}) {
+  const { snapshot, state, refresh } = useSnapshot();
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<SortKey>('order');
+  const [filter, setFilter] = useState<FilterKey>('all');
+  const [bulk, setBulk] = useState<Bulk>({ step: 'idle' });
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [memoryDelta, setMemoryDelta] = useState<BeforeAfter | null>(null);
+
+  // Same unmount/double-submit guards as the popup (App.tsx there); see its comment for why
+  // both the busy ref AND the mounted ref are needed.
+  const mountedRef = useRef(true);
+  const previewBusyRef = useRef(false);
+  const executeBusyRef = useRef(false);
+  const originRegisteredRef = useRef(false);
+  // One provider instance for the page's lifetime: isAvailable()/sample() are cheap reads,
+  // but there is no reason to re-create the closure over `chrome` on every render.
+  const memoryProviderRef = useRef(createDeviceMemoryProvider(chrome));
+  // Final-review fix: guards the #settings scroll-into-view below so it fires at most
+  // once per page load, never again once it has found and scrolled to the element.
+  const scrolledToSettingsRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Brief Step 3: on mount, register this dashboard's origin tab. The popup deliberately
+  // does NOT send this itself (Task 18's ruling) -- it only passes the id along in the URL.
+  useEffect(() => {
+    if (originRegisteredRef.current) return;
+    originRegisteredRef.current = true;
+    void sendRequest({ type: 'REGISTER_DASHBOARD_ORIGIN', originTabId: originTabIdFromLocation() }).catch(() => {
+      // Nothing to show for this: a failed registration means a later bulk run may be
+      // blocked (dashboard-origins-unreadable) or, if it is not, may include this tab -- the
+      // executor's own revalidation is what actually protects the owner, not this call.
+    });
+  }, []);
+
+  // Final-review fix: the popup's "Settings" button (Task 2) opens this page at
+  // `#settings`, but the browser's native fragment scroll only works if the target
+  // element already exists at load time -- it doesn't, since SettingsPanel (and its
+  // `id="settings"`) only renders after the GET_SNAPSHOT round-trip resolves (the
+  // 'loading' state above renders no settings element at all). No dependency array: this
+  // effect re-checks on every render, cheaply, until the element exists, then the ref
+  // guard above makes every later run a no-op -- so it runs once, not on every re-render,
+  // and never re-fires on a later refresh.
+  useEffect(() => {
+    if (scrolledToSettingsRef.current) return;
+    if (window.location.hash !== '#settings') return;
+    const settingsEl = document.getElementById('settings');
+    if (settingsEl === null) return;
+    scrolledToSettingsRef.current = true;
+    settingsEl.scrollIntoView();
+  });
+
+  function matchesFilter(row: TabRow): boolean {
+    switch (filter) {
+      case 'loaded': return row.lifecycle !== 'unloaded';
+      case 'unloaded': return row.lifecycle === 'unloaded';
+      case 'eligible': return row.manualBulkDecision.eligible;
+      case 'protected': return row.manualBulkDecision.reasons.some((r) => PROTECTION_REASONS.has(r));
+      default: return true;
+    }
+  }
+
+  function matchesSearch(row: TabRow): boolean {
+    const q = search.trim().toLowerCase();
+    if (q === '') return true;
+    return row.title.toLowerCase().includes(q) || (row.hostname ?? '').toLowerCase().includes(q);
+  }
+
+  const allRows = snapshot?.rows ?? [];
+  const rowsById = useMemo(() => new Map(allRows.map((r) => [r.tabId, r])), [allRows]);
+  const visibleIds = useMemo(
+    () => new Set(allRows.filter((r) => matchesFilter(r) && matchesSearch(r)).map((r) => r.tabId)),
+    [allRows, filter, search],
+  );
+  const sortedVisibleRows = useMemo(() => {
+    const rows = allRows.filter((r) => visibleIds.has(r.tabId));
+    if (sort === 'unused') return [...rows].sort((a, b) => b.backgroundMs - a.backgroundMs);
+    if (sort === 'title') return [...rows].sort((a, b) => a.title.localeCompare(b.title));
+    return rows; // 'order': the snapshot's own (windowId, index) order -- do not re-sort.
+  }, [allRows, visibleIds, sort]);
+  // Grouped-by-window-and-group view mirrors what Chrome itself shows (A15's collapsed-group
+  // labelling only makes sense there); any other sort necessarily cuts across groups, so it
+  // falls back to one flat list. A search or filter still narrows the grouped view too.
+  const tableMode = sort === 'order' ? 'grouped' : 'flat';
+
+  async function doPreview() {
+    if (previewBusyRef.current) return;
+    previewBusyRef.current = true;
+    setBulk({ step: 'previewing' });
+    try {
+      const preview = await sendRequest<Preview>({
+        type: 'UNLOAD_PREVIEW', scope: ALL_WINDOWS_SCOPE, mode: 'manual-bulk',
+      });
+      if (!mountedRef.current) return;
+      if (preview.blocked !== null) setBulk({ step: 'blocked', reason: preview.blocked });
+      else if (preview.eligibleTabIds.length === 0) setBulk({ step: 'empty' });
+      else setBulk({ step: 'ready', preview });
+    } catch {
+      if (mountedRef.current) setBulk({ step: 'error' });
+    } finally {
+      previewBusyRef.current = false;
+    }
+  }
+
+  function handleBulkClick() {
+    // F2/A23: the warning is shown once per owner, ever (until they clear extension
+    // storage), never an "undo" offer -- there is no undo for a discard.
+    if (!hasAcknowledgedBulk()) {
+      setBulk({ step: 'ack', then: () => void doPreview() });
+      return;
+    }
+    void doPreview();
+  }
+
+  function handleAcknowledge() {
+    setAcknowledgedBulk();
+    if (bulk.step === 'ack') bulk.then();
+  }
+
+  async function handleConfirm() {
+    if (bulk.step !== 'ready') return;
+    if (executeBusyRef.current) return;
+    executeBusyRef.current = true;
+    const { preview } = bulk;
+    // Carries its own operationId so "Cancel remaining" (sent separately, by this same id)
+    // has something to name -- the executor has no other way to reach a running batch.
+    setBulk({ step: 'executing', preview });
+    try {
+      const { result: report, delta } = await sampleMemoryAround(
+        {
+          enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
+          provider: memoryProviderRef.current,
+          wait,
+        },
+        () => sendRequest<BatchReport>({
+          type: 'UNLOAD_EXECUTE', scope: ALL_WINDOWS_SCOPE, mode: 'manual-bulk', operationId: preview.operationId,
+        }),
+      );
+      if (mountedRef.current) {
+        setAnnouncement(describeReport(report));
+      }
+      // Fire-and-forget: the announcement and the busy-release below (this try's own
+      // `finally`) must never wait on the 10s after-sample. The "Freed" line simply
+      // updates whenever this settles, same as any other async UI update.
+      void delta.then((d) => {
+        if (mountedRef.current) setMemoryDelta(d);
+      });
+    } catch {
+      if (mountedRef.current) {
+        setAnnouncement({
+          tone: 'alert',
+          text: 'Fallow could not complete the unload. Nothing further happened. Try again.',
+        });
+      }
+    } finally {
+      executeBusyRef.current = false;
+      if (mountedRef.current) setBulk({ step: 'idle' });
+    }
+  }
+
+  /** The actual per-tab request, shared by the already-acknowledged path and the ack
+   *  continuation below -- neither one touches `bulk` itself; only the caller does. */
+  async function dispatchUnloadTab(tabId: number) {
+    try {
+      const { result: report, delta } = await sampleMemoryAround(
+        {
+          enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
+          provider: memoryProviderRef.current,
+          wait,
+        },
+        () => sendRequest<BatchReport>({
+          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
+        }),
+      );
+      if (mountedRef.current) {
+        setAnnouncement(describeReport(report));
+      }
+      // Same decoupling as handleConfirm above: dispatchUnloadTab's own caller (Row's
+      // `unloading` guard, via handleUnloadTab) must be released as soon as `report` is
+      // ready, not after the after-sample.
+      void delta.then((d) => {
+        if (mountedRef.current) setMemoryDelta(d);
+      });
+    } catch {
+      if (mountedRef.current) {
+        setAnnouncement({
+          tone: 'alert',
+          text: 'Fallow could not complete the unload. Nothing further happened. Try again.',
+        });
+      }
+    }
+  }
+
+  async function handleUnloadTab(tabId: number) {
+    // Same one-time warning as the bulk button (F2/A23), armed with this call's own
+    // continuation so acknowledging resumes whichever action triggered it.
+    if (!hasAcknowledgedBulk()) {
+      setBulk({
+        step: 'ack',
+        then: () => {
+          // Dismiss the ack dialog *before* dispatching, not after: without this, the
+          // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
+          // request settles, and a second stray "Continue" click would re-invoke this
+          // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
+          // synchronously, inside the same click, means there is nothing left in the DOM
+          // for a second click to hit.
+          if (mountedRef.current) setBulk({ step: 'idle' });
+          void dispatchUnloadTab(tabId);
+        },
+      });
+      return;
+    }
+    await dispatchUnloadTab(tabId);
+  }
+
+  function handleCancelRemaining() {
+    if (bulk.step !== 'executing') return;
+    void sendRequest({ type: 'CANCEL_BATCH', operationId: bulk.preview.operationId }).catch(() => {
+      // The batch keeps running either way; this is a best-effort stop, not a guarantee.
+    });
+  }
+
+  if (state === 'loading') {
+    return (
+      <main className="dashboard">
+        <p role="status">Loading Fallow…</p>
+      </main>
+    );
+  }
+
+  if (state === 'error' || snapshot === null) {
+    return (
+      <main className="dashboard">
+        <ErrorState onRetry={refresh} />
+      </main>
+    );
+  }
+
+  const { settings, counts, windows, automationNote } = snapshot;
+
+  return (
+    <main className="dashboard">
+      <Header automationNote={automationNote} />
+      {counts === null ? (
+        // A failed tab scan has no counts; never render 0/0/0 in its place.
+        <ErrorState onRetry={refresh} />
+      ) : (
+        <>
+          <Summary counts={counts} />
+          {bulk.step === 'idle' || bulk.step === 'previewing' || bulk.step === 'error' ? (
+            <Button variant="primary" disabled={bulk.step === 'previewing'} onClick={handleBulkClick}>
+              {`Unload ${counts.eligible} eligible tabs`}
+            </Button>
+          ) : null}
+          {bulk.step === 'error' ? <p role="alert">Could not check which tabs are eligible. Try again.</p> : null}
+          {bulk.step === 'blocked' ? (
+            <div>
+              <p role="alert">{BLOCKED_TEXT[bulk.reason]}</p>
+              {/* Without this, a blocked preview/execute leaves no way back to 'idle'
+                  except reloading the page -- 'empty' already gets a Dismiss button for
+                  the same reason; 'blocked' needs the same recovery affordance. */}
+              <Button onClick={() => setBulk({ step: 'idle' })}>Dismiss</Button>
+            </div>
+          ) : null}
+          {bulk.step === 'empty' ? (
+            <EmptyState title="No eligible tabs to unload right now.">
+              <Button onClick={() => setBulk({ step: 'idle' })}>Dismiss</Button>
+            </EmptyState>
+          ) : null}
+          {bulk.step === 'ack' ? (
+            <div role="alertdialog" aria-label="Confirm unloading tabs">
+              <p>
+                Unloading a tab discards its page: unsaved text, active requests and video
+                position may be lost. Fallow will ask once more only if you clear its storage.
+              </p>
+              <div className="popup-actions">
+                <Button variant="primary" onClick={handleAcknowledge}>Continue</Button>
+                <Button onClick={() => setBulk({ step: 'idle' })}>Cancel</Button>
+              </div>
+            </div>
+          ) : null}
+          {bulk.step === 'ready' ? (
+            <div>
+              <p data-testid="preview-eligible">{bulk.preview.eligibleTabIds.length} eligible tab(s) now</p>
+              <p data-testid="preview-skipped">{bulk.preview.skipped.length} skipped</p>
+              <div className="popup-actions">
+                <Button variant="primary" onClick={handleConfirm}>{`Unload ${bulk.preview.eligibleTabIds.length}`}</Button>
+                <Button onClick={() => setBulk({ step: 'idle' })}>Cancel</Button>
+              </div>
+            </div>
+          ) : null}
+          {bulk.step === 'executing' ? (
+            <div>
+              <p>Unloading…</p>
+              <Button onClick={handleCancelRemaining}>Cancel remaining</Button>
+            </div>
+          ) : null}
+          <MemoryPanel
+            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta}
+          />
+          <Filters
+            search={search} onSearch={setSearch}
+            sort={sort} onSort={setSort}
+            filter={filter} onFilter={setFilter}
+            scopeLabel={`Showing ${sortedVisibleRows.length} of ${counts.total}`}
+          />
+          <div data-testid="table-scroll" className="scroll-area">
+            <TabTable
+              mode={tableMode} windows={windows} rows={sortedVisibleRows}
+              rowsById={rowsById} visibleIds={visibleIds} onUnload={handleUnloadTab}
+            />
+          </div>
+          <SettingsPanel settings={settings} />
+        </>
+      )}
+      {announcement !== null ? (
+        <p
+          role={announcement.tone === 'alert' ? 'alert' : 'status'}
+          aria-live={announcement.tone === 'alert' ? 'assertive' : 'polite'}
+        >
+          {announcement.text}
+        </p>
+      ) : null}
+    </main>
+  );
+}
