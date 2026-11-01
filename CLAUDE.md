@@ -1,56 +1,43 @@
 # Fallow — current focus for the next session
 
-**Read this first.** The owner restarted the session specifically to work on UI polish.
-Do not resume the feature plan (Tasks 15/17/19/20/21 below) unless the owner says to switch
-back — that is a separate, parked piece of work.
+## Popup layout fix: VERIFIED OK by the owner
 
-## Current priority: UI polish on the popup
+The owner reported the popup looked **"weird and cramped"**; root cause and fix are at
+commit `2b092d0` (page-level layout added to `fallow/src/ui/components/theme.css` — a
+fixed-width `.popup` container, a flex column with a consistent gap, a `.popup-actions` row
+for confirm/cancel, a `.popup-footer` separator above "Open dashboard"). The owner loaded
+the real build and confirmed it looks right now — **this is closed, not open work.** Don't
+re-litigate it or re-touch that CSS unless the owner raises something new.
 
-The owner's own words: the popup looked **"weird and cramped."** Root cause found and a
-first fix shipped at commit `2b092d0`: Task 16 built component-level CSS
-(`fallow/src/ui/components/theme.css` — badges, buttons, switches, tables, panels) but no
-*page-level* layout, and Task 18's popup consumed those components without adding any of
-its own. `<main className="popup">` had zero matching CSS rule. Result: plain stacked `<p>`
-and `<button>` tags at browser-default spacing, no width set, so Chrome shrink-wrapped the
-window to its narrowest line of content.
+## Current priority: open — ask the owner
 
-**What `2b092d0` added** (in `theme.css`, bottom of file): a fixed 340px width with padding
-on `.popup`, a flex column with a consistent gap replacing uneven default `<p>` margins, a
-`.popup-actions` row so confirm/cancel buttons sit side by side, and a `.popup-footer` with
-a top border separating "Open dashboard" from the unload workflow above it.
+Nothing specific is queued right now. Ask the owner what they want next: more UI polish
+(now that the popup's base layout is confirmed, there may be smaller follow-ups — spacing
+inside the preview/skipped-reasons list, dark mode, anything else they notice with more
+use), or resuming the parked feature plan below.
 
-**This fix is UNVERIFIED VISUALLY.** Browser automation (`claude-in-chrome`) cannot reach
-`chrome://extensions` or a native file picker, so "Load unpacked" cannot be driven by the
-automation tools. Playwright (`@playwright/test`, already a devDependency) can load the
-extension directly via `--load-extension=<dist>`/`--disable-extensions-except=<dist>` CLI
-args, sidestepping the file picker entirely — but its Chromium binary isn't installed in
-this environment, and installing it (`npx playwright install`, a few hundred MB download)
-was something to ask the owner first. Asked; the owner chose to verify by loading it
-themselves instead, so this fix still needs the owner's own eyes before anyone calls it done.
+If polish continues: files that matter are `fallow/src/ui/components/theme.css` (shared
+visual rules), `fallow/src/ui/popup/App.tsx` (the only real page wired up so far),
+`fallow/src/ui/popup/main.tsx` (imports `theme.css` — don't let a future page skip this).
+No test asserts on `className`, so there's room to adjust markup/classes freely, but always
+run `cd fallow && npm test && npm run typecheck && npm run build` before calling a change
+done — a green suite doesn't prove visual layout, so get the owner's own eyes on anything
+that changes appearance, the same way this fix was confirmed.
 
-### Starting the next session's work
+Getting a real screenshot without the owner's round-trip is possible but was not completed
+this session: browser automation (`claude-in-chrome`) cannot reach `chrome://extensions` or
+a native file picker, so "Load unpacked" can't be driven that way. A direct Playwright
+script (`@playwright/test` is already a devDependency) using
+`--load-extension=<dist>`/`--disable-extensions-except=<dist>` sidesteps the file picker
+entirely and got as far as proving the mechanics work, but stopped at a missing Chromium
+binary (`npx playwright install`, a few hundred MB) — ask the owner before installing it,
+rather than assuming; they declined once already but that was before this round's fix was
+confirmed to need zero further iteration, so the calculus may be different next time.
 
-1. **Ask the owner what they saw** after loading `fallow/dist` unpacked themselves — still
-   cramped, or something else now (wrong button order, missing spacing somewhere specific,
-   dark mode not kicking in, anything else). Don't assume the one fix already shipped was
-   sufficient; get their actual reaction before touching more CSS.
-2. If a real screenshot would help iterate faster than owner-round-trips, ask again whether
-   to run `npx playwright install` — the owner declined once already in this session, but
-   that was before knowing how many iterations this might take. A short Playwright script
-   that loads the extension and screenshots `popup/index.html` is already proven to work
-   mechanically (it got as far as the missing Chromium binary before stopping); see git
-   history around `2b092d0` for the exact approach if reconstructing it.
-3. Files that matter: `fallow/src/ui/components/theme.css` (all shared visual rules),
-   `fallow/src/ui/popup/App.tsx` (the only page wired up so far), `fallow/src/ui/popup/main.tsx`
-   (imports `theme.css` — don't let a future page skip this the way the popup originally did).
-   **No test asserts on `className`**, so there is room to adjust markup/classes freely —
-   but always run `cd fallow && npm test && npm run typecheck && npm run build` before
-   calling a change done, and don't let a CSS-only change regress any of the 1004 existing
-   tests.
-4. `fallow/src/ui/dashboard/main.tsx` is still a one-line placeholder stub (not the real
-   dashboard — that's Task 17, parked). It has the identical "theme.css never linked" gap,
-   deliberately left alone since that whole file gets replaced wholesale when Task 17 is
-   eventually built. Don't polish it now; it isn't the real page yet.
+`fallow/src/ui/dashboard/main.tsx` is still a one-line placeholder stub (not the real
+dashboard — that's Task 17, parked). It has the identical "theme.css never linked" gap,
+deliberately left alone since that whole file gets replaced wholesale when Task 17 is
+eventually built. Don't polish it now; it isn't the real page yet.
 
 ## Longer history and full context
 
