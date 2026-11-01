@@ -14,6 +14,29 @@ export type FakeCalls = {
   remove: number; move: number;
   /** tabs.update calls that activated a tab, i.e. an adapter focusTab. */
   focusTab: number;
+  /** chrome.permissions.request calls. Pinned: must be 0 right after construction (Task 15). */
+  permissionsRequest: number;
+};
+
+/**
+ * Scriptable chrome.permissions.* for the single optional permission Fallow ever asks for
+ * ("system.memory"). `granted` backs contains(); request() and remove() mutate it the way a
+ * real prompt or revocation would.
+ */
+export type FakePermissions = {
+  /** What chrome.permissions.contains({permissions: ['system.memory']}) resolves to. */
+  granted: boolean;
+  /** What request() resolves with, and assigns to `granted` — true models the user accepting
+   *  the prompt, false models a decline. Defaults to true. */
+  grantOnRequest: boolean;
+};
+
+/** Scriptable chrome.system.memory.getInfo(). */
+export type FakeSystemMemory = {
+  /** getInfo() rejects when true, instead of resolving with capacity/availableCapacity. */
+  throwOn: boolean;
+  capacity: number;
+  availableCapacity: number;
 };
 
 /** Every chrome event the fake can deliver. The worker registers fifteen of these. */
@@ -94,6 +117,10 @@ export type FakeChrome = {
   maxConcurrentDiscards: number;
   /** Derived counters; see FakeCalls. */
   readonly calls: FakeCalls;
+  /** The optional "system.memory" permission: chrome.permissions.contains/request/remove. */
+  permissions: FakePermissions;
+  /** chrome.system.memory.getInfo(). */
+  system: { memory: FakeSystemMemory };
   /** Replaces the whole tab list in place. */
   setTabs: (tabs: FakeTab[]) => void;
   /** Selects one tab and deselects every other tab in its window. */
@@ -177,8 +204,14 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
         groups: n('tabGroups.query'), windows: n('windows.getAll'),
         remove: f.forbidden.remove, move: f.forbidden.move,
         focusTab: f.updateCalls.filter((p) => p.active === true).length,
+        permissionsRequest: n('permissions.request'),
       };
     },
+    // Optional permission is ungranted by default, matching a fresh install that has
+    // never asked for it.
+    permissions: { granted: false, grantOnRequest: true },
+    // Arbitrary but realistic defaults: a 16 GiB machine with 4 GiB free.
+    system: { memory: { throwOn: false, capacity: 16 * 1024 ** 3, availableCapacity: 4 * 1024 ** 3 } },
     setTabs(tabs: FakeTab[]) {
       f.tabs.splice(0, f.tabs.length, ...tabs);
     },
@@ -394,6 +427,25 @@ export function createFakeChrome(initial: FakeTab[] = []): FakeChrome {
       }),
     },
     storage: { local: f.storage.local, session: f.storage.session },
+    permissions: {
+      contains: wrap('permissions.contains', () => f.permissions.granted),
+      request: wrap('permissions.request', () => {
+        f.permissions.granted = f.permissions.grantOnRequest;
+        return f.permissions.grantOnRequest;
+      }),
+      remove: wrap('permissions.remove', () => {
+        f.permissions.granted = false;
+        return true;
+      }),
+    },
+    system: {
+      memory: {
+        getInfo: wrap('system.memory.getInfo', () => {
+          if (f.system.memory.throwOn) throw new Error('system.memory.getInfo failed');
+          return { capacity: f.system.memory.capacity, availableCapacity: f.system.memory.availableCapacity };
+        }),
+      },
+    },
     tabs: {
       query: wrap('tabs.query', () => f.tabs),
       get: wrap('tabs.get', (id: number) => {
