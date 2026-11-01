@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { DeviceMemoryProvider } from '../../platform/memory-provider';
-import { formatBytes } from '../../platform/memory-provider';
+import type { BeforeAfter, DeviceMemoryProvider } from '../../platform/memory-provider';
+import { formatBytes, formatDelta } from '../../platform/memory-provider';
 import { Panel } from '../components/Panel';
 import { Button } from '../components/Button';
 
@@ -17,7 +17,9 @@ type Status = 'checking' | 'unavailable' | 'available';
  * so it fires ONLY from this component's own button click, never from an effect (Task 15's
  * own rule, restated in the brief).
  */
-export function MemoryPanel({ enabled, provider }: { enabled: boolean; provider: DeviceMemoryProvider }) {
+export function MemoryPanel({
+  enabled, provider, delta,
+}: { enabled: boolean; provider: DeviceMemoryProvider; delta: BeforeAfter | null }) {
   const [status, setStatus] = useState<Status>('checking');
   const [availableBytes, setAvailableBytes] = useState<number | null>(null);
 
@@ -70,6 +72,12 @@ export function MemoryPanel({ enabled, provider }: { enabled: boolean; provider:
         <p>
           Available: <span data-testid="memory-available">{formatBytes(status === 'available' ? availableBytes : null)}</span>
         </p>
+        {delta !== null && delta.status === 'complete' ? (
+          <p>
+            Freed: <span data-testid="memory-freed">{formatDelta(delta.deltaBytes)}</span>
+          </p>
+        ) : null}
+        <p>A reading for just Chrome&apos;s own usage is planned for a later update.</p>
         {status === 'unavailable' ? (
           <Button onClick={handleEnablePermission}>Enable device memory</Button>
         ) : null}

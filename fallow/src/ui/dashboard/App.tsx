@@ -10,7 +10,11 @@ import { MemoryPanel } from './MemoryPanel';
 import { TabTable } from './TabTable';
 import { Filters, type FilterKey, type SortKey } from './Filters';
 import { SettingsPanel } from './SettingsPanel';
-import { createDeviceMemoryProvider } from '../../platform/memory-provider';
+import {
+  createDeviceMemoryProvider, summariseBeforeAfter,
+  type BeforeAfter, type DeviceMemoryProvider,
+} from '../../platform/memory-provider';
+import { MEMORY_AFTER_DELAY_MS } from '../../domain/constants';
 // Type-only, erased at build time. Task 16's layering guard (tests/unit/ui-components.test.tsx,
 // "the ui layer reaches background/ only through type-only imports") requires every value a
 // UI page takes from the worker's half of the tree to be erased at compile time, never a
@@ -112,6 +116,30 @@ function setAcknowledgedBulk(): void {
   }
 }
 
+/** Defined once, outside the component, so it is not recreated every render. */
+const realWait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A before/after device-memory reading wrapped around an unload action (Task 6). Pure and
+ * dependency-injected -- same seam background/executor.ts already uses for its own `sleep`
+ * -- so it is tested directly, with no fake timers and no real App render. When monitoring
+ * is off, or the capability itself is unavailable, the action still runs but no sampling
+ * happens at all: `delta` is `null`, not a `BeforeAfter` with missing fields.
+ */
+export async function sampleMemoryAround<T>(
+  deps: { enabled: boolean; provider: DeviceMemoryProvider; wait: (ms: number) => Promise<void> },
+  action: () => Promise<T>,
+): Promise<{ result: T; delta: BeforeAfter | null }> {
+  if (!deps.enabled || !(await deps.provider.isAvailable())) {
+    return { result: await action(), delta: null };
+  }
+  const before = await deps.provider.sample();
+  const result = await action();
+  await deps.wait(MEMORY_AFTER_DELAY_MS);
+  const after = await deps.provider.sample();
+  return { result, delta: summariseBeforeAfter(before, after) };
+}
+
 export function App() {
   const { snapshot, state, refresh } = useSnapshot();
   const [search, setSearch] = useState('');
@@ -119,6 +147,7 @@ export function App() {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [bulk, setBulk] = useState<Bulk>({ step: 'idle' });
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [memoryDelta, setMemoryDelta] = useState<BeforeAfter | null>(null);
 
   // Same unmount/double-submit guards as the popup (App.tsx there); see its comment for why
   // both the busy ref AND the mounted ref are needed.
@@ -225,10 +254,20 @@ export function App() {
     // has something to name -- the executor has no other way to reach a running batch.
     setBulk({ step: 'executing', preview });
     try {
-      const report = await sendRequest<BatchReport>({
-        type: 'UNLOAD_EXECUTE', scope: ALL_WINDOWS_SCOPE, mode: 'manual-bulk', operationId: preview.operationId,
-      });
-      if (mountedRef.current) setAnnouncement(describeReport(report));
+      const { result: report, delta } = await sampleMemoryAround(
+        {
+          enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
+          provider: memoryProviderRef.current,
+          wait: realWait,
+        },
+        () => sendRequest<BatchReport>({
+          type: 'UNLOAD_EXECUTE', scope: ALL_WINDOWS_SCOPE, mode: 'manual-bulk', operationId: preview.operationId,
+        }),
+      );
+      if (mountedRef.current) {
+        setMemoryDelta(delta);
+        setAnnouncement(describeReport(report));
+      }
     } catch {
       if (mountedRef.current) {
         setAnnouncement({
@@ -246,10 +285,20 @@ export function App() {
    *  continuation below -- neither one touches `bulk` itself; only the caller does. */
   async function dispatchUnloadTab(tabId: number) {
     try {
-      const report = await sendRequest<BatchReport>({
-        type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
-      });
-      if (mountedRef.current) setAnnouncement(describeReport(report));
+      const { result: report, delta } = await sampleMemoryAround(
+        {
+          enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
+          provider: memoryProviderRef.current,
+          wait: realWait,
+        },
+        () => sendRequest<BatchReport>({
+          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
+        }),
+      );
+      if (mountedRef.current) {
+        setMemoryDelta(delta);
+        setAnnouncement(describeReport(report));
+      }
     } catch {
       if (mountedRef.current) {
         setAnnouncement({
@@ -364,7 +413,9 @@ export function App() {
               <Button onClick={handleCancelRemaining}>Cancel remaining</Button>
             </div>
           ) : null}
-          <MemoryPanel enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} />
+          <MemoryPanel
+            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta}
+          />
           <Filters
             search={search} onSearch={setSearch}
             sort={sort} onSort={setSort}

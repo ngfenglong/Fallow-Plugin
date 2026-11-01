@@ -1,8 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, BLOCKED_TEXT, PROTECTION_REASONS } from '../../src/ui/dashboard/App';
+import { App, BLOCKED_TEXT, PROTECTION_REASONS, sampleMemoryAround } from '../../src/ui/dashboard/App';
 import { STATE_CHANGED_MESSAGE } from '../../src/shared/messages';
-import { UNAVAILABLE_TEXT } from '../../src/domain/constants';
+import { UNAVAILABLE_TEXT, MEMORY_AFTER_DELAY_MS } from '../../src/domain/constants';
+import { MemoryPanel } from '../../src/ui/dashboard/MemoryPanel';
+import { summariseBeforeAfter } from '../../src/platform/memory-provider';
+import type { DeviceMemoryProvider } from '../../src/platform/memory-provider';
 // VALUE imports, deliberately, and only here: this test file is never shipped, so it is
 // exempt from the "no value import from src/background/ under src/ui" guard that App.tsx
 // itself must obey. App.tsx keeps BLOCKED_TEXT and PROTECTION_REASONS as hand copies
@@ -113,6 +116,22 @@ function pushStateChanged() {
 
 function rowIds(): number[] {
   return screen.getAllByTestId(/^row-/).map((el) => Number(el.getAttribute('data-testid')!.slice('row-'.length)));
+}
+
+/** Task 6 fixture: a scripted DeviceMemoryProvider, reused by sampleMemoryAround's own
+ *  tests and MemoryPanel's rendering tests below. */
+function stubProvider(samples: ReadonlyArray<{ availableBytes: number } | null>): DeviceMemoryProvider {
+  let i = 0;
+  return {
+    key: 'deviceMemory',
+    isAvailable: async () => true,
+    sample: async () => {
+      const s = samples[i++] ?? null;
+      return s === null ? null : { at: i, capacityBytes: 16 * 1024 ** 3, availableBytes: s.availableBytes };
+    },
+    requestPermission: async () => true,
+    revoke: async () => {},
+  };
 }
 
 function installChrome() {
@@ -786,5 +805,56 @@ describe('Filter bar: visible labels and a friendlier empty state', () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText('Search tabs'), { target: { value: 'nothing matches this' } });
     expect(await screen.findByText(/try clearing one of them/i)).toBeInTheDocument();
+  });
+});
+
+// ---- Task 6: a before/after reading tied to an actual unload ----------------------
+
+describe('sampleMemoryAround: a before/after reading around an action', () => {
+  it('samples before and after the action, waiting MEMORY_AFTER_DELAY_MS between them', async () => {
+    const waited: number[] = [];
+    const provider = stubProvider([{ availableBytes: 4 * 1024 ** 3 }, { availableBytes: 5 * 1024 ** 3 }]);
+    const { result, delta } = await sampleMemoryAround(
+      { enabled: true, provider, wait: async (ms) => { waited.push(ms); } },
+      async () => 'done',
+    );
+    expect(result).toBe('done');
+    expect(waited).toEqual([MEMORY_AFTER_DELAY_MS]);
+    expect(delta).toMatchObject({ status: 'complete', deltaBytes: 1 * 1024 ** 3 });
+  });
+
+  it('skips sampling entirely when monitoring is disabled', async () => {
+    const provider = stubProvider([]);
+    const sampleSpy = vi.spyOn(provider, 'sample');
+    const { result, delta } = await sampleMemoryAround(
+      { enabled: false, provider, wait: async () => {} }, async () => 'done',
+    );
+    expect(result).toBe('done');
+    expect(delta).toBeNull();
+    expect(sampleSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips sampling when the capability is unavailable, even if enabled', async () => {
+    const provider = stubProvider([]);
+    provider.isAvailable = async () => false;
+    const sampleSpy = vi.spyOn(provider, 'sample');
+    const { delta } = await sampleMemoryAround({ enabled: true, provider, wait: async () => {} }, async () => 'done');
+    expect(delta).toBeNull();
+    expect(sampleSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('MemoryPanel: a freed reading', () => {
+  it('shows how much was freed once a complete before/after delta is given', async () => {
+    const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 4 * 1024 ** 3 };
+    const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 5 * 1024 ** 3 };
+    render(<MemoryPanel enabled provider={stubProvider([])} delta={summariseBeforeAfter(before, after)} />);
+    expect(await screen.findByTestId('memory-freed')).toHaveTextContent('+1.0 GiB');
+  });
+
+  it('shows no freed figure when there is no delta yet', async () => {
+    render(<MemoryPanel enabled provider={stubProvider([])} delta={null} />);
+    await screen.findByTestId('memory-panel');
+    expect(screen.queryByTestId('memory-freed')).not.toBeInTheDocument();
   });
 });
