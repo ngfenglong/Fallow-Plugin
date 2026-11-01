@@ -1,0 +1,79 @@
+import { useEffect, useState } from 'react';
+import type { DeviceMemoryProvider } from '../../platform/memory-provider';
+import { formatBytes } from '../../platform/memory-provider';
+import { Panel } from '../components/Panel';
+import { Button } from '../components/Button';
+
+type Status = 'checking' | 'unavailable' | 'available';
+
+/**
+ * Milestone 0 (design §11.1): measured discard deltas beat the control's noise floor by
+ * 35-111x, so this is a primary panel, not a collapsed curiosity — shown whenever the
+ * owner has turned device-memory monitoring on, never shown otherwise (brief: "only once
+ * the owner enables it").
+ *
+ * `isAvailable()`/`sample()` are read-only checks and run automatically on mount/enable.
+ * `requestPermission()` is the one call that triggers a real OS/browser permission prompt,
+ * so it fires ONLY from this component's own button click, never from an effect (Task 15's
+ * own rule, restated in the brief).
+ */
+export function MemoryPanel({ enabled, provider }: { enabled: boolean; provider: DeviceMemoryProvider }) {
+  const [status, setStatus] = useState<Status>('checking');
+  const [availableBytes, setAvailableBytes] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    setStatus('checking');
+    void (async () => {
+      const available = await provider.isAvailable();
+      if (cancelled) return;
+      if (!available) {
+        setStatus('unavailable');
+        return;
+      }
+      const sample = await provider.sample();
+      if (cancelled) return;
+      if (sample === null) {
+        setStatus('unavailable');
+      } else {
+        setAvailableBytes(sample.availableBytes);
+        setStatus('available');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, provider]);
+
+  if (!enabled) return null;
+
+  async function handleEnablePermission() {
+    const granted = await provider.requestPermission();
+    if (!granted) return;
+    const sample = await provider.sample();
+    if (sample === null) {
+      setStatus('unavailable');
+    } else {
+      setAvailableBytes(sample.availableBytes);
+      setStatus('available');
+    }
+  }
+
+  return (
+    <div data-testid="memory-panel">
+      <Panel title="Device memory">
+        <p>
+          This reflects your whole device&apos;s available memory, not just Chrome. Other
+          applications and OS caching can affect this measurement.
+        </p>
+        <p>
+          Available: <span data-testid="memory-available">{formatBytes(status === 'available' ? availableBytes : null)}</span>
+        </p>
+        {status === 'unavailable' ? (
+          <Button onClick={handleEnablePermission}>Enable device memory</Button>
+        ) : null}
+      </Panel>
+    </div>
+  );
+}

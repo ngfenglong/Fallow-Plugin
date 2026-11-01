@@ -133,3 +133,41 @@ body {
    workflow above it, and pushes it to the bottom of the popup rather than letting it drift
    wherever the current step's content happens to end. */
 .popup-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--color-border); }
+
+/* The dashboard's own page-level layout -- a full tab, not a fixed-width popup, so it gets
+   a readable max width and more generous spacing between its sections instead. */
+.dashboard {
+  box-sizing: border-box;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dashboard-header h1 { font-size: 18px; margin: 0; }
+
+.scroll-area {
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.tab-table { display: flex; flex-direction: column; }
+.tab-window + .tab-window { border-top: 1px solid var(--color-border); }
+.tab-group-title { margin: 8px 12px 4px; font-weight: 600; color: var(--color-text-muted); }
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.tab-row-main { display: flex; flex-direction: column; min-width: 160px; flex: 1 1 auto; }
+.tab-row-site { color: var(--color-text-muted); font-size: 12px; }
+.tab-row-flags { display: flex; gap: 4px; }
+.tab-row-reasons { margin: 0; padding-left: 18px; flex: 1 1 100%; color: var(--color-text-muted); font-size: 12px; }
+.tab-row-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.tab-row-caption { margin: 0; font-size: 11px; color: var(--color-text-muted); max-width: 220px; }
