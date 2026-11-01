@@ -183,6 +183,11 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   // Final-review fix: guards the #settings scroll-into-view below so it fires at most
   // once per page load, never again once it has found and scrolled to the element.
   const scrolledToSettingsRef = useRef(false);
+  // Makes the ack dialog (below) reachable for keyboard/screen-reader users: scrolled into
+  // view and focused (on its "Continue" button) the moment it opens, rather than silently
+  // appearing wherever it lands in the DOM.
+  const ackDialogRef = useRef<HTMLDivElement>(null);
+  const continueButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -219,6 +224,15 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     scrolledToSettingsRef.current = true;
     settingsEl.scrollIntoView();
   });
+
+  // The ack dialog can open from either the bulk button or a per-tab "Unload now" click,
+  // wherever the owner's focus happens to be -- without this it can render off-screen or
+  // simply never receive focus, leaving keyboard/screen-reader users with no way to find it.
+  useEffect(() => {
+    if (bulk.step !== 'ack') return;
+    ackDialogRef.current?.scrollIntoView({ block: 'center' });
+    continueButtonRef.current?.focus();
+  }, [bulk.step]);
 
   function matchesFilter(row: TabRow): boolean {
     switch (filter) {
@@ -367,18 +381,23 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     // Same one-time warning as the bulk button (F2/A23), armed with this call's own
     // continuation so acknowledging resumes whichever action triggered it.
     if (!hasAcknowledgedBulk()) {
-      setBulk({
-        step: 'ack',
-        then: () => {
-          // Dismiss the ack dialog *before* dispatching, not after: without this, the
-          // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
-          // request settles, and a second stray "Continue" click would re-invoke this
-          // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
-          // synchronously, inside the same click, means there is nothing left in the DOM
-          // for a second click to hit.
-          if (mountedRef.current) setBulk({ step: 'idle' });
-          void dispatchUnloadTab(tabId);
-        },
+      // Row's `unloading` busy-guard only wraps this call, so it must not resolve until
+      // the real request has actually settled -- otherwise it releases the moment the
+      // dialog is armed, well before "Continue" is even clicked.
+      await new Promise<void>((resolve) => {
+        setBulk({
+          step: 'ack',
+          then: () => {
+            // Dismiss the ack dialog *before* dispatching, not after: without this, the
+            // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
+            // request settles, and a second stray "Continue" click would re-invoke this
+            // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
+            // synchronously, inside the same click, means there is nothing left in the DOM
+            // for a second click to hit.
+            if (mountedRef.current) setBulk({ step: 'idle' });
+            void dispatchUnloadTab(tabId).finally(resolve);
+          },
+        });
       });
       return;
     }
@@ -440,13 +459,13 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             </EmptyState>
           ) : null}
           {bulk.step === 'ack' ? (
-            <div role="alertdialog" aria-label="Confirm unloading tabs">
+            <div role="alertdialog" aria-label="Confirm unloading tabs" ref={ackDialogRef} tabIndex={-1}>
               <p>
                 Unloading a tab discards its page: unsaved text, active requests and video
                 position may be lost. Fallow will ask once more only if you clear its storage.
               </p>
               <div className="popup-actions">
-                <Button variant="primary" onClick={handleAcknowledge}>Continue</Button>
+                <Button variant="primary" onClick={handleAcknowledge} ref={continueButtonRef}>Continue</Button>
                 <Button onClick={() => setBulk({ step: 'idle' })}>Cancel</Button>
               </div>
             </div>

@@ -547,6 +547,37 @@ describe('TabTable: Unload now', () => {
     expect(fake.calls.unloadExecute).toBe(1);
   });
 
+  it('keeps Unload now disabled for the whole ack-dialog round trip, not just until the dialog opens', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('scrolls to and focuses the ack dialog when it opens', async () => {
+    // Reuse the module-scope `scrollIntoViewSpy` (set up in this file's existing
+    // beforeEach/afterEach, spying on Element.prototype.scrollIntoView) -- do not
+    // re-stub it here.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^continue$/i })).toHaveFocus();
+  });
+
   it('ignores a second Unload now click while the first is still in flight', async () => {
     localStorage.setItem('fallow.bulkAcknowledged', '1');
     snapshot = snapshotFixture({
