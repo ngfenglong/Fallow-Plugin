@@ -431,18 +431,26 @@ describe('bulk action: one-time acknowledgement', () => {
 // ---- F4: Keep loaded binds only Fallow ---------------------------------------------
 
 describe('TabTable: Keep loaded', () => {
-  it('explains that Keep loaded binds only Fallow', async () => {
+  it('explains that Keep loaded binds only Fallow, once for the whole list', async () => {
     snapshot = snapshotFixture({
       windows: [windowFixture(1, { ungroupedTabIds: [1] })],
       rows: [rowFixture({ tabId: 1 })],
       counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
     });
     render(<App />);
-    const btn = await screen.findByRole('button', { name: /keep loaded/i });
-    fireEvent.click(btn);
-    await waitFor(() =>
-      expect(screen.getByText(/Chrome or another extension can still unload/i)).toBeInTheDocument(),
-    );
+    await screen.findByRole('button', { name: /keep loaded/i });
+    expect(screen.getAllByText(/Chrome or another extension can still unload/i)).toHaveLength(1);
+  });
+
+  it('explains Keep loaded once for the whole list, not once per row', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [1, 2] })],
+      rows: [rowFixture({ tabId: 1 }), rowFixture({ tabId: 2 })],
+      counts: { total: 2, loaded: 2, unloaded: 0, eligible: 2, protected: 0 },
+    });
+    render(<App />);
+    await screen.findByTestId('row-1');
+    expect(screen.getAllByText(/binds only this Fallow session/i)).toHaveLength(1);
   });
 });
 

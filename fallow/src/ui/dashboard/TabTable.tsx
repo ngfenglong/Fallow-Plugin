@@ -76,14 +76,13 @@ function Row({ row, onUnload }: { row: TabRow; onUnload: (tabId: number) => Prom
           {protectedByFallow ? 'Stop keeping loaded' : 'Keep loaded'}
         </Button>
         <Button disabled={unloading} onClick={handleUnload}>Unload now</Button>
-        {/* F4: the owner must never read this as a Chrome-level guarantee. */}
-        <p className="tab-row-caption">
-          Binds only this Fallow session. Chrome or another extension can still unload this tab.
-        </p>
       </div>
     </div>
   );
 }
+
+/** F4: the owner must never read Keep loaded as a Chrome-level guarantee. Shown once per list. */
+const LEGEND = 'Keep loaded binds only this Fallow session. Chrome or another extension can still unload a tab.';
 
 export type TabTableMode = 'grouped' | 'flat';
 
@@ -106,6 +105,7 @@ export function TabTable({ mode, windows, rows, rowsById, visibleIds, onUnload }
     if (rows.length === 0) return <EmptyState title="No tabs match the current filter and search." />;
     return (
       <div className="tab-table">
+        <p className="tab-table-legend">{LEGEND}</p>
         {rows.map((row) => (
           <Row key={row.tabId} row={row} onUnload={onUnload} />
         ))}
@@ -122,6 +122,7 @@ export function TabTable({ mode, windows, rows, rowsById, visibleIds, onUnload }
 
   return (
     <div className="tab-table">
+      <p className="tab-table-legend">{LEGEND}</p>
       {windows.map((w) => (
         <div className="tab-window" key={w.windowId}>
           {w.groups.map((g) => {
