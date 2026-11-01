@@ -24,13 +24,19 @@ MemoryPanel, TabTable, Filters, SettingsPanel), not the placeholder stub. It lin
 repeated here). `REGISTER_DASHBOARD_ORIGIN` is now actually sent — Task 18's popup
 deliberately left this to Task 17; that gap is now closed.
 
-**This has had zero eyes on it, mine or the owner's** — same screenshot constraint as the
-popup round (`claude-in-chrome` can't reach `chrome://extensions` or a native file picker;
-Playwright's `--load-extension` flag proves out mechanically but needs
-`npx playwright install`, which the owner hasn't approved). A green suite and two review
-passes are not proof of visual layout. **First move next session: ask the owner what they
-saw when they loaded the dashboard**, the same way the popup fix was actually confirmed —
-don't assume it's fine, and don't assume more polish is wanted until they've looked.
+**Visually checked by Claude (not yet by the owner).** The owner approved installing
+Playwright's Chromium binary (`npx playwright install chromium`), which unblocked the
+`--load-extension`/`--disable-extensions-except` mechanism the popup round had only proven
+out mechanically. Ran it for real: launched the built `dist/` unpacked in actual Chromium,
+opened real tabs, screenshotted the popup and dashboard, clicked "Monitor device memory" for
+real (a genuine UPDATE_SETTINGS round-trip through the real worker) and confirmed the memory
+panel appears honestly (`Not available in standalone mode`, no fabricated zero, no granted
+permission in the throwaway profile). No defects found — see the ledger's "Visual
+verification" entry for the full list of what was checked. **The owner still hasn't looked
+themselves** — an agent's screenshot review catches structural breakage, not "does this feel
+right," which is the owner's call the same way the popup fix was actually confirmed.
+**First move next session: ask the owner what they thought**, don't assume more polish is
+wanted until they've looked.
 
 Two deferred minors worth knowing about if the owner reports something off: `App.tsx` is
 336 lines, larger than its sibling components (self-flagged as a future hook-extraction
