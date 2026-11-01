@@ -124,23 +124,43 @@ const realWait = (ms: number) => new Promise<void>((resolve) => setTimeout(resol
  * dependency-injected -- same seam background/executor.ts already uses for its own `sleep`
  * -- so it is tested directly, with no fake timers and no real App render. When monitoring
  * is off, or the capability itself is unavailable, the action still runs but no sampling
- * happens at all: `delta` is `null`, not a `BeforeAfter` with missing fields.
+ * happens at all: `delta` resolves to `null` immediately, not a `BeforeAfter` with missing
+ * fields.
+ *
+ * `delta` is a *Promise*, not an already-resolved value (final-review fix): the after
+ * sample waits MEMORY_AFTER_DELAY_MS (10s) behind `deps.wait`, and a caller that only cares
+ * about the unload's own result must never be made to wait on that -- `result` is ready as
+ * soon as `action()` itself resolves. Callers `await` the returned object (which carries
+ * `result` already settled) and separately attach to `delta` for the memory reading
+ * whenever it actually arrives.
  */
 export async function sampleMemoryAround<T>(
   deps: { enabled: boolean; provider: DeviceMemoryProvider; wait: (ms: number) => Promise<void> },
   action: () => Promise<T>,
-): Promise<{ result: T; delta: BeforeAfter | null }> {
+): Promise<{ result: T; delta: Promise<BeforeAfter | null> }> {
   if (!deps.enabled || !(await deps.provider.isAvailable())) {
-    return { result: await action(), delta: null };
+    return { result: await action(), delta: Promise.resolve(null) };
   }
   const before = await deps.provider.sample();
   const result = await action();
-  await deps.wait(MEMORY_AFTER_DELAY_MS);
-  const after = await deps.provider.sample();
-  return { result, delta: summariseBeforeAfter(before, after) };
+  // Deliberately not awaited: this is what lets `result` above reach the caller without
+  // sitting through the 10s after-sample. Neither `deps.wait` nor `provider.sample` ever
+  // throws in the real implementation (realWait never rejects; the provider swallows its
+  // own failures into `null`), so this promise is never left to reject unobserved.
+  const delta = (async (): Promise<BeforeAfter | null> => {
+    await deps.wait(MEMORY_AFTER_DELAY_MS);
+    const after = await deps.provider.sample();
+    return summariseBeforeAfter(before, after);
+  })();
+  return { result, delta };
 }
 
-export function App() {
+/**
+ * `wait` defaults to the real timer and is only ever overridden by a test (final-review
+ * fix's own App-level test for the no-10s-stall behaviour below): production always gets
+ * `realWait`, since `main.tsx` renders `<App />` with no props.
+ */
+export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> } = {}) {
   const { snapshot, state, refresh } = useSnapshot();
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortKey>('order');
@@ -158,6 +178,9 @@ export function App() {
   // One provider instance for the page's lifetime: isAvailable()/sample() are cheap reads,
   // but there is no reason to re-create the closure over `chrome` on every render.
   const memoryProviderRef = useRef(createDeviceMemoryProvider(chrome));
+  // Final-review fix: guards the #settings scroll-into-view below so it fires at most
+  // once per page load, never again once it has found and scrolled to the element.
+  const scrolledToSettingsRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -177,6 +200,23 @@ export function App() {
       // executor's own revalidation is what actually protects the owner, not this call.
     });
   }, []);
+
+  // Final-review fix: the popup's "Settings" button (Task 2) opens this page at
+  // `#settings`, but the browser's native fragment scroll only works if the target
+  // element already exists at load time -- it doesn't, since SettingsPanel (and its
+  // `id="settings"`) only renders after the GET_SNAPSHOT round-trip resolves (the
+  // 'loading' state above renders no settings element at all). No dependency array: this
+  // effect re-checks on every render, cheaply, until the element exists, then the ref
+  // guard above makes every later run a no-op -- so it runs once, not on every re-render,
+  // and never re-fires on a later refresh.
+  useEffect(() => {
+    if (scrolledToSettingsRef.current) return;
+    if (window.location.hash !== '#settings') return;
+    const settingsEl = document.getElementById('settings');
+    if (settingsEl === null) return;
+    scrolledToSettingsRef.current = true;
+    settingsEl.scrollIntoView();
+  });
 
   function matchesFilter(row: TabRow): boolean {
     switch (filter) {
@@ -258,16 +298,21 @@ export function App() {
         {
           enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
           provider: memoryProviderRef.current,
-          wait: realWait,
+          wait,
         },
         () => sendRequest<BatchReport>({
           type: 'UNLOAD_EXECUTE', scope: ALL_WINDOWS_SCOPE, mode: 'manual-bulk', operationId: preview.operationId,
         }),
       );
       if (mountedRef.current) {
-        setMemoryDelta(delta);
         setAnnouncement(describeReport(report));
       }
+      // Fire-and-forget: the announcement and the busy-release below (this try's own
+      // `finally`) must never wait on the 10s after-sample. The "Freed" line simply
+      // updates whenever this settles, same as any other async UI update.
+      void delta.then((d) => {
+        if (mountedRef.current) setMemoryDelta(d);
+      });
     } catch {
       if (mountedRef.current) {
         setAnnouncement({
@@ -289,16 +334,21 @@ export function App() {
         {
           enabled: snapshot?.settings.deviceMemoryMonitoringEnabled ?? false,
           provider: memoryProviderRef.current,
-          wait: realWait,
+          wait,
         },
         () => sendRequest<BatchReport>({
           type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
         }),
       );
       if (mountedRef.current) {
-        setMemoryDelta(delta);
         setAnnouncement(describeReport(report));
       }
+      // Same decoupling as handleConfirm above: dispatchUnloadTab's own caller (Row's
+      // `unloading` guard, via handleUnloadTab) must be released as soon as `report` is
+      // ready, not after the after-sample.
+      void delta.then((d) => {
+        if (mountedRef.current) setMemoryDelta(d);
+      });
     } catch {
       if (mountedRef.current) {
         setAnnouncement({

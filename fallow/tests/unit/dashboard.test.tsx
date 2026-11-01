@@ -35,6 +35,10 @@ import { PROTECTION } from '../../src/background/inventory';
 type Responder = (message: any) => unknown;
 let responder: Responder;
 let snapshot: any;
+// jsdom's scrollIntoView is a shared no-op stub installed by tests/setup.ts; spied on fresh
+// here each test so the #settings scroll tests below can assert on it without leaking
+// call counts into other tests.
+let scrollIntoViewSpy: ReturnType<typeof vi.spyOn>;
 
 const fake = {
   calls: { unloadPreview: 0, unloadExecute: 0, updateSettings: 0, cancelBatch: 0, setTabProtection: 0 },
@@ -199,12 +203,18 @@ beforeEach(() => {
     }
   };
   installChrome();
+  scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
+  scrollIntoViewSpy.mockRestore();
+  // A test that sets window.location.hash (the #settings scroll fix below) must not leak
+  // it into whichever test runs next in this file -- jsdom's location persists across
+  // tests within a file unless something resets it.
+  window.location.hash = '';
 });
 
 // ---- A18: the four lifecycle counts, and Protected named as overlapping -----------
@@ -759,6 +769,24 @@ describe('Header: settings link', () => {
     render(<App />);
     await waitFor(() => expect(screen.getByTestId('count-total')).toHaveTextContent('1'));
     expect(window.location.hash).toBe('');
+    // Final-review fix's own guard: no hash means the scroll effect must do nothing at all.
+    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+  });
+
+  // Final review finding 2: the popup's Settings button opens this page at #settings, but
+  // the real content (including the id="settings" element) only exists once GET_SNAPSHOT
+  // has resolved, so the browser's own native fragment-scroll-on-load has nothing to find
+  // yet. The dashboard's own effect must pick this up once that content is actually there.
+  it('scrolls the settings panel into view once loaded, when opened at #settings', async () => {
+    window.location.hash = '#settings';
+    render(<App />);
+    const settingsEl = await waitFor(() => {
+      const el = document.getElementById('settings');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    await waitFor(() => expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1));
+    expect(scrollIntoViewSpy.mock.contexts[0]).toBe(settingsEl);
   });
 });
 
@@ -818,9 +846,11 @@ describe('sampleMemoryAround: a before/after reading around an action', () => {
       { enabled: true, provider, wait: async (ms) => { waited.push(ms); } },
       async () => 'done',
     );
+    // `result` is already settled by the time sampleMemoryAround's own promise resolves,
+    // without the caller needing to touch `delta` at all (final-review fix).
     expect(result).toBe('done');
+    await expect(delta).resolves.toMatchObject({ status: 'complete', deltaBytes: 1 * 1024 ** 3 });
     expect(waited).toEqual([MEMORY_AFTER_DELAY_MS]);
-    expect(delta).toMatchObject({ status: 'complete', deltaBytes: 1 * 1024 ** 3 });
   });
 
   it('skips sampling entirely when monitoring is disabled', async () => {
@@ -830,7 +860,7 @@ describe('sampleMemoryAround: a before/after reading around an action', () => {
       { enabled: false, provider, wait: async () => {} }, async () => 'done',
     );
     expect(result).toBe('done');
-    expect(delta).toBeNull();
+    await expect(delta).resolves.toBeNull();
     expect(sampleSpy).not.toHaveBeenCalled();
   });
 
@@ -839,8 +869,48 @@ describe('sampleMemoryAround: a before/after reading around an action', () => {
     provider.isAvailable = async () => false;
     const sampleSpy = vi.spyOn(provider, 'sample');
     const { delta } = await sampleMemoryAround({ enabled: true, provider, wait: async () => {} }, async () => 'done');
-    expect(delta).toBeNull();
+    await expect(delta).resolves.toBeNull();
     expect(sampleSpy).not.toHaveBeenCalled();
+  });
+
+  it('never makes the caller wait on the after-sample for its own result (final review fix)', async () => {
+    // A `wait` that never resolves on its own: if sampleMemoryAround's returned promise
+    // depended on it, this test would hang/timeout. It doesn't, so `result` arrives fine;
+    // `delta` is simply left permanently pending here, which is exactly what a caller
+    // that never awaits it should be able to tolerate.
+    const provider = stubProvider([{ availableBytes: 4 * 1024 ** 3 }]);
+    const neverResolves = () => new Promise<void>(() => {});
+    const { result } = await sampleMemoryAround(
+      { enabled: true, provider, wait: neverResolves }, async () => 'done',
+    );
+    expect(result).toBe('done');
+  });
+});
+
+// Final review finding 1 (App level, not just the pure function): with device-memory
+// monitoring on, an unload's own result must never be gated behind the 10s after-sample.
+describe('App: an unload result is not gated on the memory after-sample', () => {
+  it('announces the result and releases busy state while the injected wait is still pending', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+      settings: defaultSettings({ deviceMemoryMonitoringEnabled: true }),
+    });
+    // Deliberately never resolved during the test body: if the unload's own result were
+    // still waiting on this (the bug this finding fixes), every assertion below would
+    // time out instead of passing.
+    const stalledWait = () => new Promise<void>(() => {});
+    render(<App wait={stalledWait} />);
+
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+
+    // reportFixture()'s own defaults (requested: 2, confirmed: 2) are irrelevant to this
+    // test; what matters is that *some* announcement with a definite result lands promptly.
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/unloaded of 2 requested/i));
+    expect(screen.getByRole('button', { name: /unload now/i })).not.toBeDisabled();
   });
 });
 
