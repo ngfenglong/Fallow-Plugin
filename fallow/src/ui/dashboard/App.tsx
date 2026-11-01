@@ -482,7 +482,10 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
               rowsById={rowsById} visibleIds={visibleIds} onUnload={handleUnloadTab}
             />
           </div>
-          <SettingsPanel settings={settings} />
+          <SettingsPanel
+            settings={settings}
+            onSaveFailed={(message) => setAnnouncement({ tone: 'alert', text: message })}
+          />
         </>
       )}
       {announcement !== null ? (

@@ -10,7 +10,7 @@ import { sendRequest } from '../client';
  * monitoring) — not Chrome's settings and not an activity log. Those belong to Task 19,
  * parked, and are deliberately absent here.
  */
-export function SettingsPanel({ settings }: { settings: Settings }) {
+export function SettingsPanel({ settings, onSaveFailed }: { settings: Settings; onSaveFailed: (message: string) => void }) {
   return (
     <Panel title="Settings" id="settings">
       <Switch
@@ -25,8 +25,13 @@ export function SettingsPanel({ settings }: { settings: Settings }) {
       </p>
       <ThresholdInput
         minutes={settings.inactivityMinutes}
-        onCommit={(next) => {
-          void sendRequest({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: next } });
+        onCommit={async (next) => {
+          try {
+            await sendRequest({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: next } });
+          } catch {
+            onSaveFailed('Fallow could not save the new threshold. It still shows the old value.');
+            throw new Error('revert'); // rethrown so ThresholdInput's commit() reverts its draft
+          }
         }}
       />
       <p className="settings-help">

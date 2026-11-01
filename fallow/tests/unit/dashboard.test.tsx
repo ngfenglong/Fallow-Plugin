@@ -814,6 +814,28 @@ describe('SettingsPanel: editable threshold', () => {
     fireEvent.blur(input);
     expect(fake.calls.updateSettings).toBe(0);
   });
+
+  it('commits a valid threshold on Enter, not just on blur', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(fake.lastRequest).toMatchObject({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: 45 } }));
+  });
+
+  it('tells the owner when a threshold save fails, and keeps showing the old value', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    responder = (m) => m.type === 'UPDATE_SETTINGS'
+      ? { ok: false, requestId: m.requestId, error: 'boom' }
+      : (m.type === 'GET_SNAPSHOT' ? ok(m.requestId, snapshot) : ok(m.requestId, null));
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not save the new threshold/i);
+    expect(input).toHaveValue(15);
+  });
 });
 
 describe('Filter bar: visible labels and a friendlier empty state', () => {
