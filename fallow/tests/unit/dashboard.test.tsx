@@ -632,3 +632,31 @@ describe('bulk action: recovering from a blocked preview', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+// ---- Settings: an editable, explained idle threshold -------------------------------
+
+describe('SettingsPanel: editable threshold', () => {
+  it('sends a threshold patch when a valid value is committed', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold in minutes/i);
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(fake.lastRequest).toMatchObject({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: 45 } }),
+    );
+  });
+
+  it('never sends a patch for an out-of-range or non-integer threshold', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold in minutes/i);
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+    fireEvent.change(input, { target: { value: '7.5' } });
+    fireEvent.blur(input);
+    fireEvent.change(input, { target: { value: '1441' } });
+    fireEvent.blur(input);
+    expect(fake.calls.updateSettings).toBe(0);
+  });
+});

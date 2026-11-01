@@ -2,15 +2,8 @@
 import type { Settings } from '../../domain/types';
 import { Switch } from '../components/Switch';
 import { Panel } from '../components/Panel';
+import { ThresholdInput } from '../components/ThresholdInput';
 import { sendRequest } from '../client';
-
-/** Same defensive formatting as the popup's: a fractional or boundary value must still render. */
-function formatThresholdMinutes(minutes: number): string {
-  if (!Number.isFinite(minutes)) return 'Unknown';
-  const rounded = Math.round(minutes * 10) / 10;
-  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-  return `${text} min`;
-}
 
 /**
  * Fallow's OWN settings (automation, threshold, protected sites, device-memory
@@ -27,7 +20,24 @@ export function SettingsPanel({ settings }: { settings: Settings }) {
           void sendRequest({ type: 'UPDATE_SETTINGS', patch: { automationEnabled: next } });
         }}
       />
-      <p>Threshold: {formatThresholdMinutes(settings.inactivityMinutes)}</p>
+      <p className="settings-help">
+        Turning this on only means Fallow checks how long tabs have sat idle — it doesn't keep tabs loaded or use extra memory itself.
+      </p>
+      <ThresholdInput
+        minutes={settings.inactivityMinutes}
+        onCommit={(next) => {
+          void sendRequest({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: next } });
+        }}
+      />
+      <p className="settings-help">
+        Automatic unloading waits this long after you stop using a tab before it unloads it.
+      </p>
+      <div className="settings-help">
+        <p><strong>How unloading works</strong></p>
+        <p><strong>Automatic</strong> — waits until a tab has been idle for the threshold above.</p>
+        <p><strong>Unload eligible tabs</strong> (the button at the top) — waits until a tab has been idle for at least 1 minute.</p>
+        <p><strong>Unload now</strong>, on a single tab — no minimum wait; only a pinned, playing, selected, or protected tab is skipped.</p>
+      </div>
       <Switch
         label="Monitor device memory"
         checked={settings.deviceMemoryMonitoringEnabled}
