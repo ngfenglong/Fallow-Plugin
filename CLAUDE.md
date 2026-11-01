@@ -1,63 +1,79 @@
-# Fallow — current focus for the next session
+# Fallow
 
-## UI/UX fixes: brainstorming in progress, resume with screenshots
+A Chrome (MV3) extension that unloads idle background tabs in place to free memory,
+while preserving window/group layout — manual single-tab and bulk unload, an
+inactivity-based automatic mode, a dashboard, and a popup. The product spec is
+`Fallow_Engineering_Plan.md` at the repo root; the as-built architecture is
+`docs/design/HLD.md` (high level) and `docs/design/LLD.md` (low level). Read those
+before touching code you haven't worked in before — this file does not repeat them.
 
-The owner has real UI complaints about the dashboard. Confirmed against the actual
-code below — these are real gaps, not misunderstandings. **This is a live
-superpowers:brainstorming thread.** Don't jump to implementation: the owner is
-attaching screenshots in this new session specifically so you can see what they mean.
-Look at those first, then resume the conversation, before proposing any design.
+This file is intentionally task-agnostic: generic project facts and how to work here,
+nothing about what's currently being built. For that, see:
 
-### Confirmed, not yet designed-out
+- **`docs/TASKS.md`** — the current backlog. This is where "what's left to do" lives.
+- **`docs/superpowers/plans/`** — the active implementation plan(s), if any are in flight.
+- **`docs/superpowers/specs/`** — design specs backing an active plan, if any.
 
-- **No editable threshold control anywhere in the UI.** `fallow/src/ui/dashboard/SettingsPanel.tsx:30`
-  and `fallow/src/ui/popup/App.tsx:210` both only DISPLAY `inactivityMinutes` as plain
-  text (`<p>Threshold: 15 min</p>`) — there is no input field. The owner cannot change
-  the idle threshold through the UI at all right now.
-- **Settings has no visible entry point.** It's a `<Panel title="Settings">` at the very
-  bottom of the dashboard page, after Summary, the optional Memory panel, Filters, and
-  the whole tab table. No nav link, no icon, nothing in the popup points at it. This is
-  likely why the owner said "I am not able to find the setting."
-- **The 1-minute manual-bulk floor is never explained anywhere in the UI.**
-  `MANUAL_BULK_FLOOR_MS = 60_000` (`fallow/src/domain/constants.ts:3`) governs manual
-  bulk unload; the owner's own "Threshold" setting governs automatic unload only. A tab
-  can be eligible one way but not the other with zero on-screen explanation of why —
-  this is the "not very self-explanatory" complaint.
-- **The memory panel only shows "Available," never "Used."**
-  `fallow/src/ui/dashboard/MemoryPanel.tsx` reads `availableBytes` only. Task 15 already
-  built `summariseBeforeAfter`/`formatDelta` (`fallow/src/platform/memory-provider.ts`)
-  specifically for a before/after reading, but the dashboard never wires it up — it's
-  sitting unused. This is the groundwork for the owner's "how do we know how to clear"
-  ask.
-- Owner describes the dashboard as **"squeezy"** in places — not yet pinned to a
-  specific element. Get this from the screenshots in this session, don't guess.
+## Where things live
 
-### Open design question — asked, not yet answered
+- `fallow/` is the actual project root — `package.json`, `src/`, `tests/` all live
+  directly under it, not under a nested `fallow/fallow`.
+- `fallow/src/domain/`, `platform/`, `background/`, `ui/`, `shared/` — see
+  `docs/design/LLD.md` §1 for the responsibility of each.
+- `fallow/tests/unit/` — Vitest + `@testing-library/react`. `fallow/tests/e2e/` is
+  planned, not yet present (tracked in `docs/TASKS.md`).
 
-Asked the owner: for "monitor the RAM currently used," do they want a live number
-visible at any time, or a before/after reading tied to an unload action (which
-`summariseBeforeAfter` already supports)? **Pick this back up first.**
+## How to work on this project
 
-### Hard gate — nothing here is approved yet
+1. **Brainstorm before designing.** New feature work or behavior changes start with
+   `superpowers:brainstorming`, not an implementation plan. Nothing gets built off an
+   unapproved design.
+2. **Write a plan from an approved design.** Use `superpowers:writing-plans`. The plan's
+   `Spec:` line should point at `docs/design/HLD.md`/`LLD.md` (and `Fallow_Engineering_Plan.md`
+   for product-level constraints), plus any session-specific spec under
+   `docs/superpowers/specs/` the brainstorm produced.
+3. **Execute the plan** with `superpowers:subagent-driven-development` (preferred — fresh
+   implementer + fresh reviewer per task, then a final whole-branch review) or
+   `superpowers:executing-plans` for inline execution. Use `superpowers:using-git-worktrees`
+   to isolate the work first.
+4. **Finish** with `superpowers:finishing-a-development-branch` — merge, PR, or keep,
+   your human partner's call every time.
+5. **Plans and specs are disposable.** Once a plan's work is merged, fold any surviving
+   open item into `docs/TASKS.md` and delete the plan/spec files under
+   `docs/superpowers/` — git history keeps the record; a stale plan sitting in the repo
+   is a worse reference than git log. `docs/design/HLD.md`/`LLD.md` are the opposite:
+   never delete these, only version them (see below).
 
-Per superpowers:brainstorming, no code changes until the owner has seen and approved an
-actual plan. Reading/exploring is fine; writing product code is not.
+## Architecture rules the test suite enforces — don't work around these
 
-## README.md: deferred until the UI fixes land
+- `fallow/src/ui/` may only take **type-only** imports from `fallow/src/background/` —
+  no runtime import crosses that boundary. Pinned test: "the ui layer reaches
+  background/ only through type-only imports."
+- No raw HTML for owner-supplied text (tab/group titles) anywhere — plain-text React
+  children only, never `innerHTML`/`dangerouslySetInnerHTML`.
+- No shipped string says "suspend" or "undo"; no capability that's off or unavailable
+  ever renders a fabricated zero/NaN measurement — it's skipped entirely instead.
+- `domain/eligibility.ts` fails closed: an input it can't interpret never produces an
+  eligible verdict.
 
-The owner wants a README (what it does, why, how it works, maybe screenshots) for
-other people to read. **Explicitly later — after the UI issues above are fixed, not
-now.** Don't start it early, even if it feels like a natural next step.
+Full detail and the exact file:line pointers for each: `docs/design/LLD.md` §5.
 
-## Everything else: shipped, working, verified
+## Commands
 
-Tasks 1–18, plus Task 15 (device memory provider) and Task 17 (real dashboard), are
-complete, reviewed, and pushed to `origin/feat/fallow-v1` (through commit `ea1178f`).
-Verified against a real unpacked build via Playwright (`--load-extension`) — no
-structural defects found in that pass. The popup's own earlier "cramped" complaint was
-fixed and owner-confirmed; don't re-touch that without a new, specific complaint.
+Run from `fallow/`:
+- `npm test` — full Vitest suite
+- `npm run typecheck` — `tsc --noEmit`, strict
+- `npm run build` — Vite build (dashboard, popup, service worker)
 
-Full history, every ruling and review: `.superpowers/sdd/2026-10-28-fallow/progress.md`.
-Still parked, resume only if the owner asks: Task 19 (Chrome settings panel + activity
-log), Task 20 (E2E tests), Task 21 (acceptance matrix/packaging/final review). None of
-these are related to the UI complaints above — don't conflate them.
+## Versioning rule
+
+`docs/design/HLD.md` and `docs/design/LLD.md` are living documents with their own
+version number at the top, kept in step with each other. Bump both (same new version)
+and add a row to each doc's Version History table whenever a shipped change alters
+architecture, a capability boundary, or the message protocol — not for a copy-only or
+UI-only fix. Keep the HLD/LLD version aligned with `fallow/package.json` /
+`fallow/public/manifest.json`'s `version` field when a release-worthy milestone bumps
+that number; they don't have to move on every commit, but they must never describe a
+shape the shipped code has moved past. `Fallow_Engineering_Plan.md` is the one exception
+to "keep current" — it's the original product spec (v1.0) and stays as written; HLD/LLD
+are what track drift from it.
