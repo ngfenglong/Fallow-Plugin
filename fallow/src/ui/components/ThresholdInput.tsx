@@ -29,7 +29,6 @@ export function ThresholdInput({ minutes, onCommit }: { minutes: number; onCommi
         Threshold (minutes)
         <input
           type="number"
-          aria-label="Threshold in minutes"
           min={THRESHOLD_MIN}
           max={THRESHOLD_MAX}
           step={1}

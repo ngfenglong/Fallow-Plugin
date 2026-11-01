@@ -247,7 +247,7 @@ describe('Summary: counts and scope', () => {
     snapshot = countsSnapshot();
     render(<App />);
     await screen.findByTestId('scope-label');
-    fireEvent.change(screen.getByLabelText('Filter'), { target: { value: 'eligible' } });
+    fireEvent.change(screen.getByLabelText('Show'), { target: { value: 'eligible' } });
     await waitFor(() => expect(screen.getByTestId('scope-label')).toHaveTextContent(/showing 2 of 3/i));
   });
 });
@@ -257,7 +257,7 @@ describe('Summary: counts and scope', () => {
 describe('Filters: sort options', () => {
   it('offers no RAM sort while no measurement provider exists', async () => {
     render(<App />);
-    await screen.findByLabelText('Sort');
+    await screen.findByLabelText('Sort by');
     expect(screen.queryByRole('option', { name: /ram/i })).toBe(null);
   });
 });
@@ -310,11 +310,11 @@ describe('Filters: sort', () => {
     snapshot = sortSnapshot();
     render(<App />);
     await screen.findByTestId('row-1');
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'unused' } });
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'unused' } });
     await waitFor(() => expect(rowIds()).toEqual([3, 2, 1]));
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'title' } });
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'title' } });
     await waitFor(() => expect(rowIds()).toEqual([2, 3, 1]));
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'order' } });
+    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'order' } });
     await waitFor(() => expect(rowIds()).toEqual([1, 2, 3]));
   });
 });
@@ -794,7 +794,7 @@ describe('SettingsPanel: editable threshold', () => {
   it('sends a threshold patch when a valid value is committed', async () => {
     snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
     render(<App />);
-    const input = await screen.findByLabelText(/threshold in minutes/i);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
     fireEvent.change(input, { target: { value: '45' } });
     fireEvent.blur(input);
     await waitFor(() =>
@@ -805,7 +805,7 @@ describe('SettingsPanel: editable threshold', () => {
   it('never sends a patch for an out-of-range or non-integer threshold', async () => {
     snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
     render(<App />);
-    const input = await screen.findByLabelText(/threshold in minutes/i);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
     fireEvent.change(input, { target: { value: '0' } });
     fireEvent.blur(input);
     fireEvent.change(input, { target: { value: '7.5' } });
@@ -831,7 +831,7 @@ describe('Filter bar: visible labels and a friendlier empty state', () => {
       counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
     });
     render(<App />);
-    fireEvent.change(await screen.findByLabelText('Search tabs'), { target: { value: 'nothing matches this' } });
+    fireEvent.change(await screen.findByLabelText('Search'), { target: { value: 'nothing matches this' } });
     expect(await screen.findByText(/try clearing one of them/i)).toBeInTheDocument();
   });
 });
