@@ -492,6 +492,24 @@ describe('TabTable: Unload now', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/0 unloaded of 1 requested \(1 skipped\)/i));
   });
 
+  it('closes the ack dialog and sends exactly one request after a first-time single-tab unload', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    const dialog = await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /continue/i }));
+    await waitFor(() => expect(fake.calls.unloadExecute).toBe(1));
+    // The dialog must not stay stuck open once the request is dispatched, and a
+    // leftover "Continue" click must not be able to re-fire it.
+    expect(screen.queryByRole('alertdialog', { name: /confirm unloading tabs/i })).toBe(null);
+    expect(fake.calls.unloadExecute).toBe(1);
+  });
+
   it('ignores a second Unload now click while the first is still in flight', async () => {
     localStorage.setItem('fallow.bulkAcknowledged', '1');
     snapshot = snapshotFixture({

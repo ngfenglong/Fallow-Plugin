@@ -242,13 +242,9 @@ export function App() {
     }
   }
 
-  async function handleUnloadTab(tabId: number) {
-    // Same one-time warning as the bulk button (F2/A23), armed with this call's own
-    // continuation so acknowledging resumes whichever action triggered it.
-    if (!hasAcknowledgedBulk()) {
-      setBulk({ step: 'ack', then: () => void handleUnloadTab(tabId) });
-      return;
-    }
+  /** The actual per-tab request, shared by the already-acknowledged path and the ack
+   *  continuation below -- neither one touches `bulk` itself; only the caller does. */
+  async function dispatchUnloadTab(tabId: number) {
     try {
       const report = await sendRequest<BatchReport>({
         type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
@@ -262,6 +258,28 @@ export function App() {
         });
       }
     }
+  }
+
+  async function handleUnloadTab(tabId: number) {
+    // Same one-time warning as the bulk button (F2/A23), armed with this call's own
+    // continuation so acknowledging resumes whichever action triggered it.
+    if (!hasAcknowledgedBulk()) {
+      setBulk({
+        step: 'ack',
+        then: () => {
+          // Dismiss the ack dialog *before* dispatching, not after: without this, the
+          // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
+          // request settles, and a second stray "Continue" click would re-invoke this
+          // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
+          // synchronously, inside the same click, means there is nothing left in the DOM
+          // for a second click to hit.
+          if (mountedRef.current) setBulk({ step: 'idle' });
+          void dispatchUnloadTab(tabId);
+        },
+      });
+      return;
+    }
+    await dispatchUnloadTab(tabId);
   }
 
   function handleCancelRemaining() {
