@@ -16,13 +16,32 @@ nothing about what's currently being built. For that, see:
 
 ## Branching
 
-Active development integrates into **`feat/fallow-v1`**, not `master` — `master` is still
-the empty pre-project state. `feat/fallow-v1` has an open PR against `master` (not yet
-merged at time of writing). When starting new work: branch/worktree from `feat/fallow-v1`
-(current HEAD), not from `master` or `origin/master` — a worktree tool that defaults to
-branching off the repo's default branch will silently miss everything built so far. Once
-`feat/fallow-v1` itself merges to `master`, delete this section; `master` becomes correct
-again on its own.
+**Default workflow for every implementation plan, unless the owner says otherwise for
+that round:**
+
+- Give it its own isolated git worktree (`superpowers:using-git-worktrees`). This is
+  pre-authorized — don't stop to ask for consent each time.
+- Branch from whichever branch currently holds the most recent integrated work, not
+  necessarily `master`. Right now that's **`feat/fallow-v1`** — `master` is still the
+  empty pre-project state, and a worktree tool that defaults to branching off the repo's
+  default branch will silently miss everything built so far. Confirm with
+  `git log --oneline -3 master` vs. `git log --oneline -3 feat/fallow-v1` if unsure which
+  one is actually ahead.
+- Open each plan's PR **directly against `master`** once the work is done — don't funnel
+  it through `feat/fallow-v1` as a staging branch first. (While more than one such PR is
+  open against `master` at once, GitHub may show a plan's diff as including an earlier
+  unmerged PR's commits too; that's expected and shrinks on its own once the earlier PR
+  merges — not a sign anything is wrong.)
+- **Clean up a worktree once its PR has merged**, not before. Before starting a new
+  plan's worktree, check whether any existing one's PR has merged
+  (`gh pr list --state merged` or `gh pr view <number> --json state`) and remove that
+  worktree (`git worktree remove`) and delete its branch first if so — don't let merged
+  worktrees pile up under `.worktrees/`. A worktree whose PR is still open stays in place
+  for review feedback, per `superpowers:finishing-a-development-branch`.
+
+Once `feat/fallow-v1` itself merges to `master`, the second bullet above becomes moot —
+`master` is simply correct again — but the PR-destination and worktree-cleanup defaults
+stay the same.
 
 ## Where things live
 
@@ -44,10 +63,11 @@ again on its own.
    `docs/superpowers/specs/` the brainstorm produced.
 3. **Execute the plan** with `superpowers:subagent-driven-development` (preferred — fresh
    implementer + fresh reviewer per task, then a final whole-branch review) or
-   `superpowers:executing-plans` for inline execution. Use `superpowers:using-git-worktrees`
-   to isolate the work first.
-4. **Finish** with `superpowers:finishing-a-development-branch` — merge, PR, or keep,
-   your human partner's call every time.
+   `superpowers:executing-plans` for inline execution. Isolate the work in its own
+   worktree first, per the "Branching" section above.
+4. **Finish** with `superpowers:finishing-a-development-branch`, presenting its usual
+   menu — but the default answer, per "Branching" above, is "push and open a PR against
+   `master`." Only keep-as-is or merge-locally instead when told to for that round.
 5. **Plans and specs are disposable.** Once a plan's work is merged, fold any surviving
    open item into `docs/TASKS.md` and delete the plan/spec files under
    `docs/superpowers/` — git history keeps the record; a stale plan sitting in the repo
