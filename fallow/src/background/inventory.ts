@@ -60,7 +60,11 @@ export type Inventory = { capture(now: number): Promise<Snapshot> };
 // STARTUP_GRACE), scope (UNSUPPORTED_URL) and state (ALREADY_UNLOADED) are not protection.
 // VERIFY_FAILED is deliberately absent too: it is Fallow failing to check, not the owner
 // or the browser protecting the tab, and counting it would overstate Protected.
-const PROTECTION: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
+//
+// Exported so a test file (never a UI runtime import -- the layering guard forbids that)
+// can assert the dashboard's own hand-kept PROTECTION_REASONS copy (src/ui/dashboard/
+// App.tsx) stays byte-identical to this, the real source of truth.
+export const PROTECTION: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
   'SELECTED', 'AUDIBLE', 'LOADING', 'TAB_PROTECTED', 'SITE_PROTECTED', 'PINNED',
   'BROWSER_PROTECTED', 'DASHBOARD_ORIGIN',
 ]);

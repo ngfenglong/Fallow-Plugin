@@ -1,8 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../src/ui/dashboard/App';
+import { App, BLOCKED_TEXT, PROTECTION_REASONS } from '../../src/ui/dashboard/App';
 import { STATE_CHANGED_MESSAGE } from '../../src/shared/messages';
 import { UNAVAILABLE_TEXT } from '../../src/domain/constants';
+// VALUE imports, deliberately, and only here: this test file is never shipped, so it is
+// exempt from the "no value import from src/background/ under src/ui" guard that App.tsx
+// itself must obey. App.tsx keeps BLOCKED_TEXT and PROTECTION_REASONS as hand copies
+// precisely because it CANNOT take these imports -- this is the one place each copy can be
+// checked against the real thing it was copied from (same pattern as popup.test.tsx's own
+// BLOCKED_TEXT parity check).
+import { blockedNote, type BlockedReason } from '../../src/background/executor';
+import { PROTECTION } from '../../src/background/inventory';
 
 // ---- fake worker + chrome harness -------------------------------------------------
 //
@@ -573,5 +581,54 @@ describe('REGISTER_DASHBOARD_ORIGIN: sent once on mount (brief Step 3, not in th
     await waitFor(() =>
       expect(fake.lastRequest).toMatchObject({ type: 'REGISTER_DASHBOARD_ORIGIN', originTabId: null }),
     );
+  });
+});
+
+// ---- parity checks for the two hand-kept copies of worker/domain vocabulary -------
+//
+// App.tsx cannot import `blockedNote` or `PROTECTION` as VALUES (the src/ui/ ->
+// src/background/ layering guard forbids it), so it keeps hand copies instead
+// (BLOCKED_TEXT, PROTECTION_REASONS). Nothing stops either copy drifting from the real
+// thing the next time someone edits BLOCKED_NOTES or PROTECTION in src/background/ and
+// forgets these dashboard copies exist -- exactly the "one rule, two definitions" pattern
+// this project has been bitten by before (Task 11's operationId check, Task 13's MODES
+// list, and the popup's own BLOCKED_TEXT, which tests/unit/popup.test.tsx already guards
+// the same way). These tests make that drift loud instead of silent.
+
+describe('BLOCKED_TEXT stays byte-identical to the worker executor it was copied from', () => {
+  const REASONS = Object.keys(BLOCKED_TEXT) as BlockedReason[];
+
+  it.each(REASONS)('matches blockedNote("%s")', (reason) => {
+    expect(BLOCKED_TEXT[reason]).toBe(blockedNote(reason));
+  });
+});
+
+describe('PROTECTION_REASONS stays identical to inventory.ts\'s real PROTECTION set', () => {
+  it('has exactly the same reason codes as the real PROTECTION set', () => {
+    expect([...PROTECTION_REASONS].sort()).toEqual([...PROTECTION].sort());
+  });
+});
+
+// ---- recovery from a blocked bulk action (reviewer finding) -----------------------
+
+describe('bulk action: recovering from a blocked preview', () => {
+  it('offers a way back to idle when a preview comes back blocked, like empty already does', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({ counts: { total: 3, loaded: 3, unloaded: 0, eligible: 3, protected: 0 } });
+    responder = (m) => {
+      if (m.type === 'GET_SNAPSHOT') return ok(m.requestId, snapshot);
+      if (m.type === 'UNLOAD_PREVIEW') {
+        return ok(m.requestId, previewFixture({ blocked: 'tabs-unavailable', eligibleTabIds: [] }));
+      }
+      return ok(m.requestId, null);
+    };
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload 3 eligible/i }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not read the tab list/i));
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    // Back to idle: the primary button is offered again, with no page reload needed.
+    await waitFor(() => expect(screen.getByRole('button', { name: /unload 3 eligible/i })).toBeInTheDocument());
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

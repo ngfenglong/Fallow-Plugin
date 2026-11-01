@@ -29,8 +29,13 @@ const ALL_WINDOWS_SCOPE: Scope = { kind: 'all' };
 /** The one permitted localStorage key in this codebase (brief Step 3), wrapped in try/catch. */
 const ACK_KEY = 'fallow.bulkAcknowledged';
 
-/** Verbatim copy of the worker executor's BLOCKED_NOTES. See the layering note above. */
-const BLOCKED_TEXT: Record<BlockedReason, string> = {
+/**
+ * Verbatim copy of the worker executor's BLOCKED_NOTES. See the layering note above.
+ * Exported so tests/unit/dashboard.test.tsx can assert byte-identical parity against the
+ * real `blockedNote`/`BLOCKED_NOTES` (test files are exempt from the layering guard), the
+ * same way tests/unit/popup.test.tsx already does for the popup's copy.
+ */
+export const BLOCKED_TEXT: Record<BlockedReason, string> = {
   'tabs-unavailable': 'Could not read the tab list, so nothing was unloaded.',
   'dashboard-origins-unreadable':
     'Could not confirm which tab this dashboard was opened from, so nothing was unloaded.',
@@ -41,8 +46,12 @@ const BLOCKED_TEXT: Record<BlockedReason, string> = {
   'internal-error': 'The operation stopped after an unexpected failure.',
 };
 
-/** Hand copy of inventory.ts's PROTECTION set, for the "Protected" filter only (see note above). */
-const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
+/**
+ * Hand copy of inventory.ts's PROTECTION set, for the "Protected" filter only (see note
+ * above). Exported for the same reason as BLOCKED_TEXT above: so the test file can assert
+ * this stays identical to the real, now-exported `PROTECTION` set in inventory.ts.
+ */
+export const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
   'SELECTED', 'AUDIBLE', 'LOADING', 'TAB_PROTECTED', 'SITE_PROTECTED', 'PINNED',
   'BROWSER_PROTECTED', 'DASHBOARD_ORIGIN',
 ]);
@@ -273,7 +282,15 @@ export function App() {
             </Button>
           ) : null}
           {bulk.step === 'error' ? <p role="alert">Could not check which tabs are eligible. Try again.</p> : null}
-          {bulk.step === 'blocked' ? <p role="alert">{BLOCKED_TEXT[bulk.reason]}</p> : null}
+          {bulk.step === 'blocked' ? (
+            <div>
+              <p role="alert">{BLOCKED_TEXT[bulk.reason]}</p>
+              {/* Without this, a blocked preview/execute leaves no way back to 'idle'
+                  except reloading the page -- 'empty' already gets a Dismiss button for
+                  the same reason; 'blocked' needs the same recovery affordance. */}
+              <Button onClick={() => setBulk({ step: 'idle' })}>Dismiss</Button>
+            </div>
+          ) : null}
           {bulk.step === 'empty' ? (
             <EmptyState title="No eligible tabs to unload right now.">
               <Button onClick={() => setBulk({ step: 'idle' })}>Dismiss</Button>
