@@ -446,6 +446,67 @@ describe('TabTable: Keep loaded', () => {
   });
 });
 
+// ---- per-tab "Unload now" -----------------------------------------------------------
+
+describe('TabTable: Unload now', () => {
+  it('unloads a single tab on request, using manual-single and a tab scope', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await waitFor(() =>
+      expect(fake.lastRequest).toMatchObject({
+        type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId: 5 }, mode: 'manual-single',
+      }),
+    );
+  });
+
+  it('asks for the same one-time acknowledgement before a first single-tab unload', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    expect(await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i })).toBeInTheDocument();
+    expect(fake.calls.unloadExecute).toBe(0);
+  });
+
+  it('reports why, not just that nothing happened, when a protected tab is sent to Unload now', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5, pinned: true })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 0, protected: 1 },
+    });
+    responder = (m) => m.type === 'UNLOAD_EXECUTE'
+      ? ok(m.requestId, reportFixture({ requested: 1, confirmed: 0, skipped: 1 }))
+      : (m.type === 'GET_SNAPSHOT' ? ok(m.requestId, snapshot) : ok(m.requestId, null));
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/0 unloaded of 1 requested \(1 skipped\)/i));
+  });
+
+  it('ignores a second Unload now click while the first is still in flight', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(fake.calls.unloadExecute).toBe(1));
+  });
+});
+
 // ---- device memory panel -----------------------------------------------------------
 
 describe('MemoryPanel: gated on the owner enabling it', () => {

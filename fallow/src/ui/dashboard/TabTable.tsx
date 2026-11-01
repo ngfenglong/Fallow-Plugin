@@ -23,10 +23,11 @@ function isProtectedByFallow(row: TabRow): boolean {
  * onerror payload); every piece of owner-supplied text below is a plain text child, never
  * raw markup, so it can never execute (Review Focus 4 / the no-raw-html scan).
  */
-function Row({ row }: { row: TabRow }) {
+function Row({ row, onUnload }: { row: TabRow; onUnload: (tabId: number) => Promise<void> }) {
   const state = LIFECYCLE[row.lifecycle];
   const protectedByFallow = isProtectedByFallow(row);
   const [pending, setPending] = useState(false);
+  const [unloading, setUnloading] = useState(false);
 
   async function toggleProtection() {
     if (pending) return;
@@ -38,6 +39,16 @@ function Row({ row }: { row: TabRow }) {
       // shows the true state either way, so nothing here needs to roll back optimistically.
     } finally {
       setPending(false);
+    }
+  }
+
+  async function handleUnload() {
+    if (unloading) return;
+    setUnloading(true);
+    try {
+      await onUnload(row.tabId);
+    } finally {
+      setUnloading(false);
     }
   }
 
@@ -64,6 +75,7 @@ function Row({ row }: { row: TabRow }) {
         <Button disabled={pending} onClick={toggleProtection}>
           {protectedByFallow ? 'Stop keeping loaded' : 'Keep loaded'}
         </Button>
+        <Button disabled={unloading} onClick={handleUnload}>Unload now</Button>
         {/* F4: the owner must never read this as a Chrome-level guarantee. */}
         <p className="tab-row-caption">
           Binds only this Fallow session. Chrome or another extension can still unload this tab.
@@ -85,15 +97,17 @@ export type TabTableProps = {
   rowsById: ReadonlyMap<number, TabRow>;
   /** Grouped mode: which tab ids survive the current filter/search. */
   visibleIds: ReadonlySet<number>;
+  /** Unloads just this one tab (manual-single, `{ kind: 'tab', tabId }`). */
+  onUnload: (tabId: number) => Promise<void>;
 };
 
-export function TabTable({ mode, windows, rows, rowsById, visibleIds }: TabTableProps) {
+export function TabTable({ mode, windows, rows, rowsById, visibleIds, onUnload }: TabTableProps) {
   if (mode === 'flat') {
     if (rows.length === 0) return <EmptyState title="No tabs match the current filter and search." />;
     return (
       <div className="tab-table">
         {rows.map((row) => (
-          <Row key={row.tabId} row={row} />
+          <Row key={row.tabId} row={row} onUnload={onUnload} />
         ))}
       </div>
     );
@@ -121,7 +135,7 @@ export function TabTable({ mode, windows, rows, rowsById, visibleIds }: TabTable
                 </p>
                 {tabIds.map((id) => {
                   const row = rowsById.get(id);
-                  return row ? <Row key={id} row={row} /> : null;
+                  return row ? <Row key={id} row={row} onUnload={onUnload} /> : null;
                 })}
               </div>
             );
@@ -130,7 +144,7 @@ export function TabTable({ mode, windows, rows, rowsById, visibleIds }: TabTable
             .filter((id) => visibleIds.has(id))
             .map((id) => {
               const row = rowsById.get(id);
-              return row ? <Row key={id} row={row} /> : null;
+              return row ? <Row key={id} row={row} onUnload={onUnload} /> : null;
             })}
         </div>
       ))}

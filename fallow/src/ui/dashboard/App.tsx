@@ -58,7 +58,7 @@ export const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
 
 type Bulk =
   | { step: 'idle' }
-  | { step: 'ack' }
+  | { step: 'ack'; then: () => void }
   | { step: 'previewing' }
   | { step: 'ready'; preview: Preview }
   | { step: 'executing'; preview: Preview }
@@ -205,7 +205,7 @@ export function App() {
     // F2/A23: the warning is shown once per owner, ever (until they clear extension
     // storage), never an "undo" offer -- there is no undo for a discard.
     if (!hasAcknowledgedBulk()) {
-      setBulk({ step: 'ack' });
+      setBulk({ step: 'ack', then: () => void doPreview() });
       return;
     }
     void doPreview();
@@ -213,7 +213,7 @@ export function App() {
 
   function handleAcknowledge() {
     setAcknowledgedBulk();
-    void doPreview();
+    if (bulk.step === 'ack') bulk.then();
   }
 
   async function handleConfirm() {
@@ -239,6 +239,28 @@ export function App() {
     } finally {
       executeBusyRef.current = false;
       if (mountedRef.current) setBulk({ step: 'idle' });
+    }
+  }
+
+  async function handleUnloadTab(tabId: number) {
+    // Same one-time warning as the bulk button (F2/A23), armed with this call's own
+    // continuation so acknowledging resumes whichever action triggered it.
+    if (!hasAcknowledgedBulk()) {
+      setBulk({ step: 'ack', then: () => void handleUnloadTab(tabId) });
+      return;
+    }
+    try {
+      const report = await sendRequest<BatchReport>({
+        type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
+      });
+      if (mountedRef.current) setAnnouncement(describeReport(report));
+    } catch {
+      if (mountedRef.current) {
+        setAnnouncement({
+          tone: 'alert',
+          text: 'Fallow could not complete the unload. Nothing further happened. Try again.',
+        });
+      }
     }
   }
 
@@ -334,7 +356,7 @@ export function App() {
           <div data-testid="table-scroll" className="scroll-area">
             <TabTable
               mode={tableMode} windows={windows} rows={sortedVisibleRows}
-              rowsById={rowsById} visibleIds={visibleIds}
+              rowsById={rowsById} visibleIds={visibleIds} onUnload={handleUnloadTab}
             />
           </div>
           <SettingsPanel settings={settings} />
