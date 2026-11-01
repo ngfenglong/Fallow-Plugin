@@ -1,74 +1,63 @@
 # Fallow — current focus for the next session
 
-## Popup layout fix: VERIFIED OK by the owner
+## UI/UX fixes: brainstorming in progress, resume with screenshots
 
-The owner reported the popup looked **"weird and cramped"**; root cause and fix are at
-commit `2b092d0` (page-level layout added to `fallow/src/ui/components/theme.css` — a
-fixed-width `.popup` container, a flex column with a consistent gap, a `.popup-actions` row
-for confirm/cancel, a `.popup-footer` separator above "Open dashboard"). The owner loaded
-the real build and confirmed it looks right now — **this is closed, not open work.** Don't
-re-litigate it or re-touch that CSS unless the owner raises something new.
+The owner has real UI complaints about the dashboard. Confirmed against the actual
+code below — these are real gaps, not misunderstandings. **This is a live
+superpowers:brainstorming thread.** Don't jump to implementation: the owner is
+attaching screenshots in this new session specifically so you can see what they mean.
+Look at those first, then resume the conversation, before proposing any design.
 
-## Task 15 (device memory provider) and Task 17 (real dashboard): DONE, VISUALLY UNVERIFIED
+### Confirmed, not yet designed-out
 
-The owner asked to resume the parked plan at Task 17; Task 15 was a hard prerequisite
-Task 17 consumes (`createDeviceMemoryProvider`, `createCapabilityRegistry`,
-`formatBytes`/`formatDelta`/`summariseBeforeAfter`, `createSamplingLock`) and had never
-been built, so both were done in order with the owner's confirmation first. Commits
-`1f6fd30` (Task 15) and `a81f43d`+`d5e790e` (Task 17, incl. one fix round). Both reviewed
-clean — 1058 tests, typecheck clean, build clean.
+- **No editable threshold control anywhere in the UI.** `fallow/src/ui/dashboard/SettingsPanel.tsx:30`
+  and `fallow/src/ui/popup/App.tsx:210` both only DISPLAY `inactivityMinutes` as plain
+  text (`<p>Threshold: 15 min</p>`) — there is no input field. The owner cannot change
+  the idle threshold through the UI at all right now.
+- **Settings has no visible entry point.** It's a `<Panel title="Settings">` at the very
+  bottom of the dashboard page, after Summary, the optional Memory panel, Filters, and
+  the whole tab table. No nav link, no icon, nothing in the popup points at it. This is
+  likely why the owner said "I am not able to find the setting."
+- **The 1-minute manual-bulk floor is never explained anywhere in the UI.**
+  `MANUAL_BULK_FLOOR_MS = 60_000` (`fallow/src/domain/constants.ts:3`) governs manual
+  bulk unload; the owner's own "Threshold" setting governs automatic unload only. A tab
+  can be eligible one way but not the other with zero on-screen explanation of why —
+  this is the "not very self-explanatory" complaint.
+- **The memory panel only shows "Available," never "Used."**
+  `fallow/src/ui/dashboard/MemoryPanel.tsx` reads `availableBytes` only. Task 15 already
+  built `summariseBeforeAfter`/`formatDelta` (`fallow/src/platform/memory-provider.ts`)
+  specifically for a before/after reading, but the dashboard never wires it up — it's
+  sitting unused. This is the groundwork for the owner's "how do we know how to clear"
+  ask.
+- Owner describes the dashboard as **"squeezy"** in places — not yet pinned to a
+  specific element. Get this from the screenshots in this session, don't guess.
 
-`fallow/src/ui/dashboard/main.tsx` is now the real dashboard (App, Header, Summary,
-MemoryPanel, TabTable, Filters, SettingsPanel), not the placeholder stub. It links
-`theme.css` from its first commit (the gap Task 18's popup had to fix after the fact is not
-repeated here). `REGISTER_DASHBOARD_ORIGIN` is now actually sent — Task 18's popup
-deliberately left this to Task 17; that gap is now closed.
+### Open design question — asked, not yet answered
 
-**Visually checked by Claude (not yet by the owner).** The owner approved installing
-Playwright's Chromium binary (`npx playwright install chromium`), which unblocked the
-`--load-extension`/`--disable-extensions-except` mechanism the popup round had only proven
-out mechanically. Ran it for real: launched the built `dist/` unpacked in actual Chromium,
-opened real tabs, screenshotted the popup and dashboard, clicked "Monitor device memory" for
-real (a genuine UPDATE_SETTINGS round-trip through the real worker) and confirmed the memory
-panel appears honestly (`Not available in standalone mode`, no fabricated zero, no granted
-permission in the throwaway profile). No defects found — see the ledger's "Visual
-verification" entry for the full list of what was checked. **The owner still hasn't looked
-themselves** — an agent's screenshot review catches structural breakage, not "does this feel
-right," which is the owner's call the same way the popup fix was actually confirmed.
-**First move next session: ask the owner what they thought**, don't assume more polish is
-wanted until they've looked.
+Asked the owner: for "monitor the RAM currently used," do they want a live number
+visible at any time, or a before/after reading tied to an unload action (which
+`summariseBeforeAfter` already supports)? **Pick this back up first.**
 
-Two deferred minors worth knowing about if the owner reports something off: `App.tsx` is
-336 lines, larger than its sibling components (self-flagged as a future hook-extraction
-candidate, not a bug); the "Keep loaded" caption renders statically rather than appearing
-only after a click, so if the owner expects it to appear conditionally, that's a real gap,
-not a test gap. Full list of deferred minors is in the ledger's Task 17 entries.
+### Hard gate — nothing here is approved yet
 
-## Current priority: open — ask the owner
+Per superpowers:brainstorming, no code changes until the owner has seen and approved an
+actual plan. Reading/exploring is fine; writing product code is not.
 
-Ask what they saw loading the dashboard, then what they want next: dashboard polish, or
-resuming the still-parked plan (Task 19 Chrome settings panel + activity log, Task 20 E2E
-tests, Task 21 acceptance matrix/packaging/final review).
+## README.md: deferred until the UI fixes land
 
-Files that matter for dashboard polish: `fallow/src/ui/dashboard/*.tsx`,
-`fallow/src/ui/components/theme.css` (shared visual rules, also used by the popup — check
-both pages after any change there). No test asserts on `className`, so markup/classes are
-free to adjust, but always run `cd fallow && npm test && npm run typecheck && npm run build`
-before calling a change done — a green suite doesn't prove visual layout.
+The owner wants a README (what it does, why, how it works, maybe screenshots) for
+other people to read. **Explicitly later — after the UI issues above are fixed, not
+now.** Don't start it early, even if it feels like a natural next step.
 
-## Longer history and full context
+## Everything else: shipped, working, verified
 
-Every decision, ruling, and review from Tasks 11–18 (the action executor through the popup)
-and Tasks 15/17 (the device memory provider and dashboard, just completed) is recorded in
-`.superpowers/sdd/2026-10-28-fallow/progress.md` — the authoritative ledger for this
-project, read by the superpowers SDD workflow. The original 21-task plan is at
-`docs/superpowers/plans/2026-10-28-fallow.md`; the design spec at
-`docs/superpowers/specs/2026-10-28-fallow-design.md`.
+Tasks 1–18, plus Task 15 (device memory provider) and Task 17 (real dashboard), are
+complete, reviewed, and pushed to `origin/feat/fallow-v1` (through commit `ea1178f`).
+Verified against a real unpacked build via Playwright (`--load-extension`) — no
+structural defects found in that pass. The popup's own earlier "cramped" complaint was
+fixed and owner-confirmed; don't re-touch that without a new, specific complaint.
 
-**Parked, not abandoned** — resume only if the owner asks: Task 19 (Chrome settings panel +
-activity log), Task 20 (E2E tests), Task 21 (acceptance matrix A01–A24, benchmarks,
-packaging, final review). Several carry-forwards are already queued for whichever of these
-resumes first — see the ledger's most recent entries for the full list (a narrow tracker
-race and an unmeasured Chrome event-ordering question, both carried into Task 21's A12
-fault-injection acceptance item; a soft carry-forward about the unused `KEYS.memorySamples`
-ring buffer if a future sample-history feature is ever built).
+Full history, every ruling and review: `.superpowers/sdd/2026-10-28-fallow/progress.md`.
+Still parked, resume only if the owner asks: Task 19 (Chrome settings panel + activity
+log), Task 20 (E2E tests), Task 21 (acceptance matrix/packaging/final review). None of
+these are related to the UI complaints above — don't conflate them.
