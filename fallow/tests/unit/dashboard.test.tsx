@@ -934,9 +934,24 @@ describe('MemoryPanel: Available and Freed stay honest (Task 1)', () => {
     const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 4 * 1024 ** 3 };
     const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 6 * 1024 ** 3 };
     const delta = summariseBeforeAfter(before, after);
-    const { rerender } = render(<MemoryPanel enabled provider={stubProvider([])} delta={null} />);
-    rerender(<MemoryPanel enabled provider={stubProvider([])} delta={delta} />);
+    // One stable provider, and wait for the mount-time sample to settle first: a new provider
+    // object on rerender would re-run the mount effect, whose late null sample would race the
+    // delta and clear it (the same unavailable-clears-reading rule the regression test below pins).
+    const provider = stubProvider([]);
+    const { rerender } = render(<MemoryPanel enabled provider={provider} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent(UNAVAILABLE_TEXT));
+    rerender(<MemoryPanel enabled provider={provider} delta={delta} />);
     await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent('6.0 GiB'));
+  });
+
+  it('clears a previous reading once the capability goes unavailable again', async () => {
+    const unavailableProvider: DeviceMemoryProvider = { ...stubProvider([]), isAvailable: async () => false };
+    const { rerender } = render(<MemoryPanel enabled provider={stubProvider([{ availableBytes: 4 * 1024 ** 3 }])} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent('4.0 GiB'));
+    rerender(<MemoryPanel enabled provider={unavailableProvider} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent(UNAVAILABLE_TEXT));
+    expect(screen.getByTestId('memory-available')).not.toHaveTextContent('4.0 GiB');
+    expect(screen.getByRole('button', { name: /enable device memory/i })).toBeInTheDocument();
   });
 
   it('shows a reassuring note instead of a negative figure when the device reading moved the wrong way', async () => {

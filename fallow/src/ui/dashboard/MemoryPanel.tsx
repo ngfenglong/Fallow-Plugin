@@ -31,12 +31,14 @@ export function MemoryPanel({
       const available = await provider.isAvailable();
       if (cancelled) return;
       if (!available) {
+        setAvailableBytes(null);
         setStatus('unavailable');
         return;
       }
       const sample = await provider.sample();
       if (cancelled) return;
       if (sample === null) {
+        setAvailableBytes(null);
         setStatus('unavailable');
       } else {
         setAvailableBytes(sample.availableBytes);
@@ -53,6 +55,7 @@ export function MemoryPanel({
   useEffect(() => {
     if (delta !== null && delta.status === 'complete') {
       setAvailableBytes(delta.after!.availableBytes);
+      setStatus('available');
     }
   }, [delta]);
 
@@ -63,6 +66,7 @@ export function MemoryPanel({
     if (!granted) return;
     const sample = await provider.sample();
     if (sample === null) {
+      setAvailableBytes(null);
       setStatus('unavailable');
     } else {
       setAvailableBytes(sample.availableBytes);
@@ -78,7 +82,7 @@ export function MemoryPanel({
           applications and OS caching can affect this measurement.
         </p>
         <p>
-          Available: <span data-testid="memory-available">{formatBytes(availableBytes)}</span>
+          Available: <span data-testid="memory-available">{formatBytes(status === 'available' ? availableBytes : null)}</span>
         </p>
         {delta !== null && delta.status === 'complete' ? (
           <p>
