@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import { App } from './App';
 
-// Placeholder; replaced by a later task.
-createRoot(document.getElementById('root')!).render(<h1>Fallow popup</h1>);
+const root = document.getElementById('root');
+if (root) createRoot(root).render(<App />);

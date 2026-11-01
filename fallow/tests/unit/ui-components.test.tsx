@@ -480,9 +480,7 @@ describe('theme tokens (plan section 6: dark mode, 4.5:1 text, visible focus)', 
 
 describe('the ui layer reaches background/ only through type-only imports', () => {
   // A value import would pull the worker's module (and its chrome.* listeners) into the page.
-  // Parsed with the real TypeScript compiler, not a line-by-line regex: a regex scan missed
-  // a bare side-effect import (`import '../background/x'`, no `from` token at all) and a
-  // dynamic import (`import('../background/x')`), neither of which a bundler can erase.
+  // See unsafeImportsOf below for how this is matched and why it isn't a line-by-line regex.
   function listSource(dir: string): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const full = join(dir, e.name);
