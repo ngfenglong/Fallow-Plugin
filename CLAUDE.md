@@ -14,6 +14,16 @@ nothing about what's currently being built. For that, see:
 - **`docs/superpowers/plans/`** — the active implementation plan(s), if any are in flight.
 - **`docs/superpowers/specs/`** — design specs backing an active plan, if any.
 
+## Branching
+
+Active development integrates into **`feat/fallow-v1`**, not `master` — `master` is still
+the empty pre-project state. `feat/fallow-v1` has an open PR against `master` (not yet
+merged at time of writing). When starting new work: branch/worktree from `feat/fallow-v1`
+(current HEAD), not from `master` or `origin/master` — a worktree tool that defaults to
+branching off the repo's default branch will silently miss everything built so far. Once
+`feat/fallow-v1` itself merges to `master`, delete this section; `master` becomes correct
+again on its own.
+
 ## Where things live
 
 - `fallow/` is the actual project root — `package.json`, `src/`, `tests/` all live
