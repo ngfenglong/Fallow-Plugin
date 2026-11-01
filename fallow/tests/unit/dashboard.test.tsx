@@ -768,3 +768,23 @@ describe('SettingsPanel: editable threshold', () => {
     expect(fake.calls.updateSettings).toBe(0);
   });
 });
+
+describe('Filter bar: visible labels and a friendlier empty state', () => {
+  it('labels each filter control for a sighted non-developer reader', async () => {
+    render(<App />);
+    expect(await screen.findByText('Search')).toBeInTheDocument();
+    expect(screen.getByText('Sort by')).toBeInTheDocument();
+    expect(screen.getByText('Show')).toBeInTheDocument();
+  });
+
+  it('gives a friendlier empty-search message than a bare technical sentence', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [1] })],
+      rows: [rowFixture({ tabId: 1, title: 'Example' })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText('Search tabs'), { target: { value: 'nothing matches this' } });
+    expect(await screen.findByText(/try clearing one of them/i)).toBeInTheDocument();
+  });
+});

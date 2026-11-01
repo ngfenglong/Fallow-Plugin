@@ -102,7 +102,7 @@ export type TabTableProps = {
 
 export function TabTable({ mode, windows, rows, rowsById, visibleIds, onUnload }: TabTableProps) {
   if (mode === 'flat') {
-    if (rows.length === 0) return <EmptyState title="No tabs match the current filter and search." />;
+    if (rows.length === 0) return <EmptyState title="No tabs match your search or filter. Try clearing one of them." />;
     return (
       <div className="tab-table">
         <p className="tab-table-legend">{LEGEND}</p>
@@ -118,7 +118,7 @@ export function TabTable({ mode, windows, rows, rowsById, visibleIds, onUnload }
       w.ungroupedTabIds.some((id) => visibleIds.has(id)) ||
       w.groups.some((g) => g.tabIds.some((id) => visibleIds.has(id))),
   );
-  if (!anyVisible) return <EmptyState title="No tabs match the current filter and search." />;
+  if (!anyVisible) return <EmptyState title="No tabs match your search or filter. Try clearing one of them." />;
 
   return (
     <div className="tab-table">
