@@ -107,3 +107,29 @@ body {
 .error-state { border: 1px solid var(--color-danger-fg); background: var(--color-danger-bg); color: var(--color-danger-fg); border-radius: 8px; padding: 12px 16px; }
 .error-state p { margin: 4px 0; }
 .error-title { font-weight: 600; }
+
+/* Page-level layout. Component CSS above has no opinion on spacing between components —
+   that is this page's job, and its absence is exactly what made the popup look cramped:
+   plain stacked <p> and <button> tags at browser-default (zero) gap, with no width set so
+   Chrome shrink-wraps the popup window to whatever its narrowest line of content happens
+   to be. */
+.popup {
+  box-sizing: border-box;
+  width: 340px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.popup > p { margin: 0; }
+.popup ul { margin: 0; padding-left: 20px; }
+.popup ul li { margin: 2px 0; }
+
+/* A row of buttons that act on the same thing (confirm/cancel, dismiss) sits side by side,
+   not stacked full-width like every other direct child of .popup. */
+.popup-actions { display: flex; gap: 8px; }
+
+/* Visually separates "Open dashboard" (navigation, always available) from the unload
+   workflow above it, and pushes it to the bottom of the popup rather than letting it drift
+   wherever the current step's content happens to end. */
+.popup-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--color-border); }

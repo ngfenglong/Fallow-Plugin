@@ -250,17 +250,21 @@ export function App() {
                   ))}
                 </ul>
               ) : null}
-              <Button variant="primary" disabled={bulk.executing} onClick={handleConfirm}>
-                {`Unload ${bulk.preview.eligibleTabIds.length}`}
-              </Button>
-              <Button disabled={bulk.executing} onClick={() => setBulk({ step: 'idle' })}>
-                Cancel
-              </Button>
+              <div className="popup-actions">
+                <Button variant="primary" disabled={bulk.executing} onClick={handleConfirm}>
+                  {`Unload ${bulk.preview.eligibleTabIds.length}`}
+                </Button>
+                <Button disabled={bulk.executing} onClick={() => setBulk({ step: 'idle' })}>
+                  Cancel
+                </Button>
+              </div>
             </div>
           ) : null}
         </>
       )}
-      <Button onClick={handleOpenDashboard}>Open dashboard</Button>
+      <div className="popup-footer">
+        <Button onClick={handleOpenDashboard}>Open dashboard</Button>
+      </div>
       {announcement !== null ? (
         <p role={announcement.tone === 'alert' ? 'alert' : 'status'} aria-live={announcement.tone === 'alert' ? 'assertive' : 'polite'}>
           {announcement.text}
