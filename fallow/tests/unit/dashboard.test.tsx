@@ -578,6 +578,43 @@ describe('TabTable: Unload now', () => {
     expect(screen.getByRole('button', { name: /^continue$/i })).toHaveFocus();
   });
 
+  it("ignores a second tab's Unload now click while another tab's ack dialog is already pending", async () => {
+    // Regression for a clobbered `bulk.then` slot: tab A's click arms the shared ack
+    // dialog; before "Continue" is clicked, tab B's own "Unload now" is clicked too. That
+    // second click must not overwrite tab A's pending continuation (which would both lose
+    // tab A's request and leave tab A's busy-guard permanently stuck, since its own
+    // promise would never resolve) -- and tab B's own busy-guard must not get stuck either.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5, 6] })],
+      rows: [rowFixture({ tabId: 5 }), rowFixture({ tabId: 6 })],
+      counts: { total: 2, loaded: 2, unloaded: 0, eligible: 2, protected: 0 },
+    });
+    render(<App />);
+    const rowA = await screen.findByTestId('row-5');
+    const rowB = await screen.findByTestId('row-6');
+    const buttonA = within(rowA).getByRole('button', { name: /unload now/i });
+    const buttonB = within(rowB).getByRole('button', { name: /unload now/i });
+
+    fireEvent.click(buttonA);
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(buttonA).toBeDisabled();
+
+    fireEvent.click(buttonB);
+    // Tab B's click must be a no-op, not a second dialog or a clobbered continuation: its
+    // own busy-guard has to clear normally rather than waiting forever on a promise whose
+    // `resolve` was never captured because it never armed anything.
+    await waitFor(() => expect(buttonB).not.toBeDisabled());
+    // The dialog is still open, still owned by tab A's continuation.
+    expect(screen.getByRole('alertdialog', { name: /confirm unloading tabs/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    await waitFor(() => expect(fake.calls.unloadExecute).toBe(1));
+    expect(fake.lastRequest).toMatchObject({ type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId: 5 } });
+    // Exactly one request ever: tab B's clobbered click never sends its own.
+    expect(fake.calls.unloadExecute).toBe(1);
+    await waitFor(() => expect(buttonA).not.toBeDisabled());
+  });
+
   it('ignores a second Unload now click while the first is still in flight', async () => {
     localStorage.setItem('fallow.bulkAcknowledged', '1');
     snapshot = snapshotFixture({

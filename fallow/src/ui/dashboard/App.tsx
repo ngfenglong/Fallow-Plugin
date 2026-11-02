@@ -381,6 +381,13 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     // Same one-time warning as the bulk button (F2/A23), armed with this call's own
     // continuation so acknowledging resumes whichever action triggered it.
     if (!hasAcknowledgedBulk()) {
+      // `bulk.then` is a single slot: a second "Unload now" click (a different tab's row)
+      // while this dialog is still open would silently clobber this call's continuation
+      // (and the `resolve` captured inside it), permanently losing this tab's request and
+      // leaving this row's busy-guard stuck forever (its promise would never resolve). The
+      // dialog already belongs to whichever call armed it first -- treat this click as a
+      // no-op: no second request, no stuck button, nothing overwritten.
+      if (bulk.step === 'ack') return;
       // Row's `unloading` busy-guard only wraps this call, so it must not resolve until
       // the real request has actually settled -- otherwise it releases the moment the
       // dialog is armed, well before "Continue" is even clicked.
