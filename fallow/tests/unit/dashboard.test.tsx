@@ -1067,3 +1067,10 @@ describe('TabTable: memory deltas are tagged by operation (Task 1)', () => {
     expect(fake.lastRequest.operationId).toMatch(/^tab-5-/);
   });
 });
+
+describe('Settings: Unload now copy', () => {
+  it('explains Unload now covers every real skip reason, not a shortened list', async () => {
+    render(<App />);
+    expect(await screen.findByText(/skipped only if the tab is pinned, playing audio/i)).toBeInTheDocument();
+  });
+});

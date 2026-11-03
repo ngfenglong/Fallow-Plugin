@@ -150,11 +150,11 @@ export function App() {
     }
   }
 
-  async function handleOpenDashboard() {
-    // F2/A14: the active tab must be read BEFORE chrome.tabs.create, because creating and
-    // focusing the new dashboard tab changes which tab is active. A query that rejects or
-    // returns nothing still lets the dashboard open, just without an origin id — this task
-    // does not send REGISTER_DASHBOARD_ORIGIN at all (see the task report).
+  // F2/A14: the active tab must be read BEFORE chrome.tabs.create, because creating and
+  // focusing the new dashboard tab changes which tab is active. A query that rejects or
+  // returns nothing still lets the dashboard open, just without an origin id. Shared by the
+  // "Open dashboard" and "Settings" buttons; `fragment` (e.g. '#settings') lands on that panel.
+  async function openDashboardTab(fragment?: string): Promise<void> {
     let originTabId: number | null = null;
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -164,7 +164,8 @@ export function App() {
       originTabId = null;
     }
     const base = chrome.runtime.getURL('dashboard/index.html');
-    const url = originTabId !== null ? `${base}?originTabId=${originTabId}` : base;
+    const query = originTabId !== null ? `?originTabId=${originTabId}` : '';
+    const url = `${base}${query}${fragment ?? ''}`;
     try {
       chrome.tabs.create({ url });
     } catch {
@@ -173,25 +174,12 @@ export function App() {
     }
   }
 
-  // Same origin-tab lookup as handleOpenDashboard, just landing on the dashboard's settings
-  // panel instead of its top (Task 2: the settings panel had no findable entry point).
-  async function handleOpenSettings() {
-    let originTabId: number | null = null;
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const id = tabs[0]?.id;
-      if (typeof id === 'number') originTabId = id;
-    } catch {
-      originTabId = null;
-    }
-    const base = chrome.runtime.getURL('dashboard/index.html');
-    const url = originTabId !== null ? `${base}?originTabId=${originTabId}#settings` : `${base}#settings`;
-    try {
-      chrome.tabs.create({ url });
-    } catch {
-      // Nothing more this popup can do if Chrome refuses to open a tab; no tab of the
-      // owner's was touched, so there is nothing to roll back.
-    }
+  function handleOpenDashboard() {
+    return openDashboardTab();
+  }
+
+  function handleOpenSettings() {
+    return openDashboardTab('#settings');
   }
 
   if (state === 'loading') {

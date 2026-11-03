@@ -16,7 +16,7 @@ export function Filters({
   scopeLabel: string;
 }) {
   return (
-    <section className="panel" aria-label="Filters">
+    <section className="panel filters" aria-label="Filters">
       <label>
         <span>Search</span>
         <input
