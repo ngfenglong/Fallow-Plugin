@@ -7,7 +7,8 @@
     "test": "vitest run",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:dist": "vite build && vitest run --config vitest.dist.config.ts"
+    "test:dist": "vite build && vitest run --config vitest.dist.config.ts",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "react": "19.3.1",
