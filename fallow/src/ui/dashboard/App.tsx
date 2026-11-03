@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSnapshot } from '../useSnapshot';
 import { sendRequest } from '../client';
 import { Button } from '../components/Button';
@@ -10,6 +10,8 @@ import { MemoryPanel } from './MemoryPanel';
 import { TabTable } from './TabTable';
 import { Filters, type FilterKey, type SortKey } from './Filters';
 import { SettingsPanel } from './SettingsPanel';
+import { ChromeSettingsPanel } from './ChromeSettingsPanel';
+import { ActivityLog } from './ActivityLog';
 import {
   createDeviceMemoryProvider, summariseBeforeAfter,
   type BeforeAfter, type DeviceMemoryProvider,
@@ -27,6 +29,10 @@ import { MEMORY_AFTER_DELAY_MS } from '../../domain/constants';
 import type { BatchReport, BlockedReason, Preview, Scope } from '../../background/executor';
 import type { TabRow } from '../../background/inventory';
 import type { ReasonCode } from '../../domain/reason-codes';
+// Type-only, same as the HistoryEntry note in ActivityLog.tsx: platform/ is not subject to
+// the ui/background layering guard, but only the shape is needed here.
+import type { HistoryEntry } from '../../platform/storage';
+import { STATE_CHANGED_MESSAGE } from '../../shared/messages';
 
 const ALL_WINDOWS_SCOPE: Scope = { kind: 'all' };
 
@@ -107,6 +113,13 @@ function hasAcknowledgedBulk(): boolean {
   }
 }
 
+/** Same shape-check useSnapshot.ts's own isStateChanged uses, duplicated here (not shared
+ *  runtime code) so the history refresh below can react to the same broadcast. */
+function isStateChangedMessage(message: unknown): boolean {
+  return typeof message === 'object' && message !== null
+    && (message as { type?: unknown }).type === STATE_CHANGED_MESSAGE.type;
+}
+
 function setAcknowledgedBulk(): void {
   try {
     window.localStorage.setItem(ACK_KEY, '1');
@@ -170,6 +183,9 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   // Tagged with the operationId of the request that produced it, so a reading always says
   // which action it describes when unloads overlap (most recent still wins).
   const [memoryDelta, setMemoryDelta] = useState<{ operationId: string; delta: BeforeAfter } | null>(null);
+  // ActivityLog's entries (Task 6/19): fetched here via GET_HISTORY, not inside ActivityLog
+  // itself, which only renders what it is given and issues CLEAR_HISTORY on its own button.
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   // Same unmount/double-submit guards as the popup (App.tsx there); see its comment for why
   // both the busy ref AND the mounted ref are needed.
@@ -195,6 +211,39 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       mountedRef.current = false;
     };
   }, []);
+
+  // Task 6/19: ActivityLog's data source. Fetched once on mount and again on every
+  // STATE_CHANGED_MESSAGE broadcast (the background worker sends this after the same
+  // operations that append history rows, per worker-listeners.ts/executor.ts), the same
+  // signal useSnapshot.ts already refreshes the tab snapshot on. A reply that is not an
+  // array (e.g. a test harness's generic `data: null` stub for an unhandled request type)
+  // falls back to the previous list rather than crashing ActivityLog's render.
+  //
+  // Declared, and its effect run, BEFORE the REGISTER_DASHBOARD_ORIGIN effect below: React
+  // runs a component's effects in declaration order, and dashboard.test.tsx's own
+  // "registers ... on mount" tests read `fake.lastRequest` (the single most-recently-sent
+  // message) right after mount expecting REGISTER_DASHBOARD_ORIGIN -- so that call must be
+  // the last one sent on mount, not this one.
+  const refreshHistory = useCallback(() => {
+    void sendRequest<HistoryEntry[]>({ type: 'GET_HISTORY' })
+      .then((entries) => {
+        if (mountedRef.current && Array.isArray(entries)) setHistory(entries);
+      })
+      .catch(() => {
+        // Leave the previous list showing; a transient read failure here does not warrant
+        // its own error state.
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshHistory();
+    const onMessage = (message: unknown) => {
+      if (isStateChangedMessage(message)) refreshHistory();
+      return undefined;
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }, [refreshHistory]);
 
   // Brief Step 3: on mount, register this dashboard's origin tab. The popup deliberately
   // does NOT send this itself (Task 18's ruling) -- it only passes the id along in the URL.
@@ -512,6 +561,8 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             settings={settings}
             onSaveFailed={(message) => setAnnouncement({ tone: 'alert', text: message })}
           />
+          <ChromeSettingsPanel />
+          <ActivityLog entries={history} onCleared={refreshHistory} />
         </>
       )}
       {announcement !== null ? (
