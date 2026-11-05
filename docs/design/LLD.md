@@ -1,6 +1,6 @@
 # Fallow — Low-Level Design
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Status:** matches the extension version in `fallow/package.json` / `fallow/public/manifest.json`. Keep this file and `HLD.md` in lockstep — bump both together. See `CLAUDE.md` → "Versioning rule."
 
 **Spec it implements:** `Fallow_Engineering_Plan.md` (root product spec). Argues from `HLD.md` for architecture; this file is the concrete reference beneath it.
@@ -10,6 +10,7 @@
 | Version | Date | What changed |
 |---|---|---|
 | 0.1.0 | 2026-11-02 | First write-up, covering the system through the Phase 1 dashboard/popup UX merge. |
+| 0.2.0 | 2026-11-06 | §4 updated: the Chrome-process memory/CPU capability-provider item is closed no-go for this version per the feasibility finding in `docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`. `processMemory`/`processCpu` keys remain reserved and unregistered; no implementation shipped. |
 
 ## 1. Directory map (`fallow/src/`)
 
@@ -83,7 +84,7 @@ interface DeviceMemoryProvider extends CapabilityProvider {
 interface CapabilityRegistry { get(key: CapabilityKey): CapabilityProvider | undefined; }
 ```
 
-Only `'deviceMemory'` is implemented today (backed by the optional `system.memory` permission — whole-device, never per-tab, per `Fallow_Engineering_Plan.md` §2). `'processCpu'`/`'processMemory'` are reserved keys for the Chrome-process-only reading tracked as an open item — implementing them is gated on a feasibility finding, since `chrome.processes` is Dev-channel-only on Stable Chrome (`Fallow_Engineering_Plan.md` §18, [S3]). `'osSwap'` is unimplemented and out of scope per the root spec §2.
+Only `'deviceMemory'` is implemented today (backed by the optional `system.memory` permission — whole-device, never per-tab, per `Fallow_Engineering_Plan.md` §2). `'processCpu'`/`'processMemory'` are reserved, unregistered keys for the Chrome-process-only reading item, **closed no-go for this version** by the 2026-11-06 feasibility finding (`docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`): `chrome.processes` is still Dev-channel-only against current official docs with no Stable successor shipped, the restriction is channel-based (unaffected by Fallow's `minimum_chrome_version`), and the native-messaging-companion alternative was assessed and also rejected — it cannot obtain a tab→process-ID mapping on Stable Chrome either, and per-tab attribution is not well-defined in general (site-isolation process splitting, shared renderer processes, browser/GPU/utility processes belonging to no tab). Re-open only on a Chrome platform change or an owner-sponsored, separately scoped native-companion effort. `'osSwap'` is unimplemented and out of scope per the root spec §2.
 
 `summariseBeforeAfter(before, after): BeforeAfter` and `formatDelta(deltaBytes): string` are pure helpers used by the dashboard's before/after "Freed" reading (`ui/dashboard/App.tsx`'s `sampleMemoryAround`).
 

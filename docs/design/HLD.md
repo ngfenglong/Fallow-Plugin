@@ -1,6 +1,6 @@
 # Fallow — High-Level Design
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Status:** matches the extension version in `fallow/package.json` / `fallow/public/manifest.json`. Bump this doc's version (and add a Version History row) whenever a change ships that alters architecture, capability boundaries, or the message protocol — not for copy/UI-only fixes. See `CLAUDE.md` → "Versioning rule" for the exact policy.
 
 **Origin spec:** `Fallow_Engineering_Plan.md` (the root product spec, v1.0, 2026-10-27). This document and `LLD.md` describe the system as actually built, kept current against that spec; they are not a replacement for it.
@@ -10,6 +10,7 @@
 | Version | Date | What changed |
 |---|---|---|
 | 0.1.0 | 2026-11-02 | First HLD/LLD write-up. Documents the system as of Tasks 1–18 (core extension) and the Phase 1 dashboard/popup UX pass, both shipped and merged to `feat/fallow-v1`. |
+| 0.2.0 | 2026-11-06 | Chrome-process memory feasibility spike concluded **no-go** for this version (`docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`): `chrome.processes` is still Dev-channel-only on current official docs, has no Stable successor, and the gate is channel-based (not fixed by raising `minimum_chrome_version`); the native-messaging-companion alternative is also rejected (inherits the same tab→PID attribution blocker, plus its own install/security/update burden). No capability-provider code shipped; `processMemory`/`processCpu` stay reserved, unregistered keys. |
 
 ## 1. What Fallow is
 
@@ -48,7 +49,7 @@ Both extension pages (dashboard, popup) and the service worker are separate JS c
 - Chrome settings panel + activity log (originally "Task 19")
 - End-to-end test coverage via Playwright (originally "Task 20")
 - Acceptance matrix, benchmarks, packaging, and the project README (originally "Task 21" + "Phase 4")
-- Chrome-process-only memory reading — a `processMemory`/`processCpu` capability provider ("Phase 2"); **not a drop-in build** — `chrome.processes` is Dev-channel-only per `Fallow_Engineering_Plan.md` §2/§18 [S3], so this needs its own feasibility finding before any implementation commitment (mirrors how the original "Milestone 0" spike gated the first build). The capability-provider boundary (`CapabilityKey = 'tabLifecycle' | 'deviceMemory' | 'processCpu' | 'processMemory' | 'osSwap'`, see `LLD.md` §4) already has a slot reserved for this.
+- Chrome-process-only memory reading — a `processMemory`/`processCpu` capability provider ("Phase 2") is **closed as no-go for this version** per the 2026-11-06 feasibility finding (`docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`, now folded into `docs/TASKS.md`): `chrome.processes` is still Dev-channel-only against current official docs, has shipped no Stable successor, and the restriction is channel-based so raising `minimum_chrome_version` cannot unlock it; the native-messaging-companion alternative (§17 of the root spec) is also rejected — it cannot itself obtain a tab→process-ID mapping on Stable Chrome either, and per-tab attribution is not well-defined in general (site-isolation process splitting, shared renderer processes, browser/GPU/utility processes belonging to no tab). The capability-provider boundary (`CapabilityKey = 'tabLifecycle' | 'deviceMemory' | 'processCpu' | 'processMemory' | 'osSwap'`, see `LLD.md` §4) keeps the two keys reserved and unregistered; re-open only if Chrome ships a Stable-channel successor or the owner commissions the native-companion path as its own scoped project with explicit sign-off.
 - In-repo install/update tooling for a non-technical owner ("Phase 3")
 - A backlog of smaller UI findings from code review, some blocked on the owner's own screenshot review of visual/spacing complaints — see `docs/TASKS.md`.
 
