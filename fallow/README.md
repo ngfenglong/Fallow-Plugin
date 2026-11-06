@@ -30,7 +30,7 @@ lose your layout by closing them. Fallow gives you:
 What Fallow deliberately does **not** do: it never shows a fabricated memory number
 when a measurement isn't available, it never closes or reorders a tab, and it has no
 access to exact per-tab RAM/CPU — Chrome doesn't expose that to extensions on Stable
-(see `docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`). The full
+(see `docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md`). The full
 product rationale lives in `../Fallow_Engineering_Plan.md`; the as-built architecture is
 `../docs/design/HLD.md` (high level) and `../docs/design/LLD.md` (low level).
 

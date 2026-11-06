@@ -59,7 +59,7 @@ include-subdomains flag), never a full URL or page title.
 If you turn on the device-memory setting, Fallow requests the optional `system.memory`
 permission and reads *whole-device* available/total RAM — never a per-tab or per-process
 figure (Chrome doesn't expose that to extensions on Stable; see
-`docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`). That reading
+`docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md`). That reading
 is shown live and is not persisted into history. If you deny the permission request, or
 revoke `system.memory` later from `chrome://extensions`, the memory panel disappears —
 Fallow never shows a stale, zero, or fabricated number in its place.

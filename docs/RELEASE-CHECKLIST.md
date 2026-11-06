@@ -5,7 +5,7 @@ build, or — if that day comes — submitting to the Chrome Web Store). It's a 
 reusable checklist: re-run every item each time, don't assume last release's answers
 still hold. Record the date and findings of each run at the bottom of this file or in a
 dated note under `docs/` (see Task 8's
-`docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md` for the
+`docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md` for the
 freshness bar this is meant to match — a dated, sourced finding, not a re-asserted
 assumption).
 
@@ -35,7 +35,7 @@ successor between releases. Before each release:
   checked.
 - Specifically re-confirm S3: is `chrome.processes` still Dev-channel-only? (Last
   independently re-verified **2026-11-06** by Task 8 of the 2026-11-02 hardening plan —
-  see `docs/superpowers/specs/2026-11-02-chrome-process-memory-feasibility.md`. Still
+  see `docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md`. Still
   Dev-only as of that date, with no Stable successor found. That finding is specific to
   S3 only — S1/S2/S4–S9 have not been independently re-checked since the engineering
   plan's original 2026-10-27 date as of this writing, and are the first thing the next
