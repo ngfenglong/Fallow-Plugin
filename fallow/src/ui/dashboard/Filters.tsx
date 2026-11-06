@@ -16,19 +16,18 @@ export function Filters({
   scopeLabel: string;
 }) {
   return (
-    <section className="panel" aria-label="Filters">
+    <section className="panel filters" aria-label="Filters">
       <label>
         <span>Search</span>
         <input
           type="search"
-          aria-label="Search tabs"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
         />
       </label>
       <label>
         <span>Sort by</span>
-        <select aria-label="Sort" value={sort} onChange={(e) => onSort(e.target.value as SortKey)}>
+        <select value={sort} onChange={(e) => onSort(e.target.value as SortKey)}>
           <option value="order">Tab order</option>
           <option value="unused">Longest unused</option>
           <option value="title">Title</option>
@@ -36,7 +35,7 @@ export function Filters({
       </label>
       <label>
         <span>Show</span>
-        <select aria-label="Filter" value={filter} onChange={(e) => onFilter(e.target.value as FilterKey)}>
+        <select value={filter} onChange={(e) => onFilter(e.target.value as FilterKey)}>
           <option value="all">All</option>
           <option value="loaded">Loaded</option>
           <option value="unloaded">Unloaded</option>

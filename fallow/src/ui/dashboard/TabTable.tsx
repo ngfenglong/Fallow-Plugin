@@ -75,7 +75,15 @@ function Row({ row, onUnload }: { row: TabRow; onUnload: (tabId: number) => Prom
         <Button disabled={pending} onClick={toggleProtection}>
           {protectedByFallow ? 'Stop keeping loaded' : 'Keep loaded'}
         </Button>
-        <Button disabled={unloading} onClick={handleUnload}>Unload now</Button>
+        {/*
+         * A19 (e2e): a tab with no hostname (chrome://, file://, an extension page, …) can
+         * never become eligible -- UNSUPPORTED_URL is a permanent, scheme-based exclusion,
+         * not a transient one like "audible" or "not old enough yet" that a later refresh
+         * could lift. Previously this button stayed enabled for such a row and a click
+         * simply produced a silent "skipped" outcome; disabling it here is the minimal fix
+         * so an internal page visibly offers no unload action instead of a no-op click.
+         */}
+        <Button disabled={unloading || row.hostname === null} onClick={handleUnload}>Unload now</Button>
       </div>
     </div>
   );

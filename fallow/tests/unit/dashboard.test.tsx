@@ -247,7 +247,7 @@ describe('Summary: counts and scope', () => {
     snapshot = countsSnapshot();
     render(<App />);
     await screen.findByTestId('scope-label');
-    fireEvent.change(screen.getByLabelText('Filter'), { target: { value: 'eligible' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show' }), { target: { value: 'eligible' } });
     await waitFor(() => expect(screen.getByTestId('scope-label')).toHaveTextContent(/showing 2 of 3/i));
   });
 });
@@ -257,7 +257,7 @@ describe('Summary: counts and scope', () => {
 describe('Filters: sort options', () => {
   it('offers no RAM sort while no measurement provider exists', async () => {
     render(<App />);
-    await screen.findByLabelText('Sort');
+    await screen.findByRole('combobox', { name: 'Sort by' });
     expect(screen.queryByRole('option', { name: /ram/i })).toBe(null);
   });
 });
@@ -310,11 +310,11 @@ describe('Filters: sort', () => {
     snapshot = sortSnapshot();
     render(<App />);
     await screen.findByTestId('row-1');
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'unused' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'unused' } });
     await waitFor(() => expect(rowIds()).toEqual([3, 2, 1]));
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'title' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'title' } });
     await waitFor(() => expect(rowIds()).toEqual([2, 3, 1]));
-    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'order' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Sort by' }), { target: { value: 'order' } });
     await waitFor(() => expect(rowIds()).toEqual([1, 2, 3]));
   });
 });
@@ -545,6 +545,98 @@ describe('TabTable: Unload now', () => {
     // leftover "Continue" click must not be able to re-fire it.
     expect(screen.queryByRole('alertdialog', { name: /confirm unloading tabs/i })).toBe(null);
     expect(fake.calls.unloadExecute).toBe(1);
+  });
+
+  it('keeps Unload now disabled for the whole ack-dialog round trip, not just until the dialog opens', async () => {
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(button).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('re-enables Unload now when Cancel, not Continue, is clicked on the ack dialog', async () => {
+    // Regression for a stuck busy-guard: Cancel used to go through a bare
+    // `setBulk({ step: 'idle' })` that discarded the `bulk` object -- including the `then`
+    // closure's captured `resolve` -- without ever calling it, so handleUnloadTab's
+    // `await new Promise(...)` never settled and this row's button stayed disabled for
+    // the rest of the page's life.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(button).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(screen.queryByRole('alertdialog', { name: /confirm unloading tabs/i })).toBe(null);
+    // Cancel must never have dispatched a request.
+    expect(fake.calls.unloadExecute).toBe(0);
+  });
+
+  it('scrolls to and focuses the ack dialog when it opens', async () => {
+    // Reuse the module-scope `scrollIntoViewSpy` (set up in this file's existing
+    // beforeEach/afterEach, spying on Element.prototype.scrollIntoView) -- do not
+    // re-stub it here.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^continue$/i })).toHaveFocus();
+  });
+
+  it("ignores a second tab's Unload now click while another tab's ack dialog is already pending", async () => {
+    // Regression for a clobbered `bulk.then` slot: tab A's click arms the shared ack
+    // dialog; before "Continue" is clicked, tab B's own "Unload now" is clicked too. That
+    // second click must not overwrite tab A's pending continuation (which would both lose
+    // tab A's request and leave tab A's busy-guard permanently stuck, since its own
+    // promise would never resolve) -- and tab B's own busy-guard must not get stuck either.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5, 6] })],
+      rows: [rowFixture({ tabId: 5 }), rowFixture({ tabId: 6 })],
+      counts: { total: 2, loaded: 2, unloaded: 0, eligible: 2, protected: 0 },
+    });
+    render(<App />);
+    const rowA = await screen.findByTestId('row-5');
+    const rowB = await screen.findByTestId('row-6');
+    const buttonA = within(rowA).getByRole('button', { name: /unload now/i });
+    const buttonB = within(rowB).getByRole('button', { name: /unload now/i });
+
+    fireEvent.click(buttonA);
+    await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(buttonA).toBeDisabled();
+
+    fireEvent.click(buttonB);
+    // Tab B's click must be a no-op, not a second dialog or a clobbered continuation: its
+    // own busy-guard has to clear normally rather than waiting forever on a promise whose
+    // `resolve` was never captured because it never armed anything.
+    await waitFor(() => expect(buttonB).not.toBeDisabled());
+    // The dialog is still open, still owned by tab A's continuation.
+    expect(screen.getByRole('alertdialog', { name: /confirm unloading tabs/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    await waitFor(() => expect(fake.calls.unloadExecute).toBe(1));
+    expect(fake.lastRequest).toMatchObject({ type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId: 5 } });
+    // Exactly one request ever: tab B's clobbered click never sends its own.
+    expect(fake.calls.unloadExecute).toBe(1);
+    await waitFor(() => expect(buttonA).not.toBeDisabled());
   });
 
   it('ignores a second Unload now click while the first is still in flight', async () => {
@@ -794,7 +886,7 @@ describe('SettingsPanel: editable threshold', () => {
   it('sends a threshold patch when a valid value is committed', async () => {
     snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
     render(<App />);
-    const input = await screen.findByLabelText(/threshold in minutes/i);
+    const input = await screen.findByRole('spinbutton', { name: /threshold \(minutes\)/i });
     fireEvent.change(input, { target: { value: '45' } });
     fireEvent.blur(input);
     await waitFor(() =>
@@ -805,7 +897,7 @@ describe('SettingsPanel: editable threshold', () => {
   it('never sends a patch for an out-of-range or non-integer threshold', async () => {
     snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
     render(<App />);
-    const input = await screen.findByLabelText(/threshold in minutes/i);
+    const input = await screen.findByRole('spinbutton', { name: /threshold \(minutes\)/i });
     fireEvent.change(input, { target: { value: '0' } });
     fireEvent.blur(input);
     fireEvent.change(input, { target: { value: '7.5' } });
@@ -813,6 +905,28 @@ describe('SettingsPanel: editable threshold', () => {
     fireEvent.change(input, { target: { value: '1441' } });
     fireEvent.blur(input);
     expect(fake.calls.updateSettings).toBe(0);
+  });
+
+  it('commits a valid threshold on Enter, not just on blur', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(fake.lastRequest).toMatchObject({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: 45 } }));
+  });
+
+  it('tells the owner when a threshold save fails, and keeps showing the old value', async () => {
+    snapshot = snapshotFixture({ settings: defaultSettings({ inactivityMinutes: 15 }) });
+    responder = (m) => m.type === 'UPDATE_SETTINGS'
+      ? { ok: false, requestId: m.requestId, error: 'boom' }
+      : (m.type === 'GET_SNAPSHOT' ? ok(m.requestId, snapshot) : ok(m.requestId, null));
+    render(<App />);
+    const input = await screen.findByLabelText(/threshold \(minutes\)/i);
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not save the new threshold/i);
+    expect(input).toHaveValue(15);
   });
 });
 
@@ -831,7 +945,7 @@ describe('Filter bar: visible labels and a friendlier empty state', () => {
       counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
     });
     render(<App />);
-    fireEvent.change(await screen.findByLabelText('Search tabs'), { target: { value: 'nothing matches this' } });
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search' }), { target: { value: 'nothing matches this' } });
     expect(await screen.findByText(/try clearing one of them/i)).toBeInTheDocument();
   });
 });
@@ -926,5 +1040,61 @@ describe('MemoryPanel: a freed reading', () => {
     render(<MemoryPanel enabled provider={stubProvider([])} delta={null} />);
     await screen.findByTestId('memory-panel');
     expect(screen.queryByTestId('memory-freed')).not.toBeInTheDocument();
+  });
+});
+
+describe('MemoryPanel: Available and Freed stay honest (Task 1)', () => {
+  it('updates Available to the after-sample once a complete delta arrives', async () => {
+    const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 4 * 1024 ** 3 };
+    const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 6 * 1024 ** 3 };
+    const delta = summariseBeforeAfter(before, after);
+    // One stable provider, and wait for the mount-time sample to settle first: a new provider
+    // object on rerender would re-run the mount effect, whose late null sample would race the
+    // delta and clear it (the same unavailable-clears-reading rule the regression test below pins).
+    const provider = stubProvider([]);
+    const { rerender } = render(<MemoryPanel enabled provider={provider} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent(UNAVAILABLE_TEXT));
+    rerender(<MemoryPanel enabled provider={provider} delta={delta} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent('6.0 GiB'));
+  });
+
+  it('clears a previous reading once the capability goes unavailable again', async () => {
+    const unavailableProvider: DeviceMemoryProvider = { ...stubProvider([]), isAvailable: async () => false };
+    const { rerender } = render(<MemoryPanel enabled provider={stubProvider([{ availableBytes: 4 * 1024 ** 3 }])} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent('4.0 GiB'));
+    rerender(<MemoryPanel enabled provider={unavailableProvider} delta={null} />);
+    await waitFor(() => expect(screen.getByTestId('memory-available')).toHaveTextContent(UNAVAILABLE_TEXT));
+    expect(screen.getByTestId('memory-available')).not.toHaveTextContent('4.0 GiB');
+    expect(screen.getByRole('button', { name: /enable device memory/i })).toBeInTheDocument();
+  });
+
+  it('shows a reassuring note instead of a negative figure when the device reading moved the wrong way', async () => {
+    const before = { at: 1, capacityBytes: 16 * 1024 ** 3, availableBytes: 6 * 1024 ** 3 };
+    const after = { at: 2, capacityBytes: 16 * 1024 ** 3, availableBytes: 5 * 1024 ** 3 };
+    render(<MemoryPanel enabled provider={stubProvider([])} delta={summariseBeforeAfter(before, after)} />);
+    expect(await screen.findByTestId('memory-freed')).toHaveTextContent(/little or none/i);
+  });
+});
+
+describe('TabTable: memory deltas are tagged by operation (Task 1)', () => {
+  it('tags a memory delta with the operationId of the action that produced it', async () => {
+    localStorage.setItem('fallow.bulkAcknowledged', '1');
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+      settings: defaultSettings({ deviceMemoryMonitoringEnabled: true }),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /unload now/i }));
+    await waitFor(() => expect(fake.lastRequest).toMatchObject({ type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId: 5 } }));
+    expect(fake.lastRequest.operationId).toMatch(/^tab-5-/);
+  });
+});
+
+describe('Settings: Unload now copy', () => {
+  it('explains Unload now covers every real skip reason, not a shortened list', async () => {
+    render(<App />);
+    expect(await screen.findByText(/skipped only if the tab is pinned, playing audio/i)).toBeInTheDocument();
   });
 });

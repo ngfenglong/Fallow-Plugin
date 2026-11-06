@@ -6,8 +6,11 @@
   "scripts": {
     "test": "vitest run",
     "build": "vite build",
+    "setup": "npm install && npm run build",
     "typecheck": "tsc --noEmit",
-    "test:dist": "vite build && vitest run --config vitest.dist.config.ts"
+    "test:dist": "vite build && vitest run --config vitest.dist.config.ts",
+    "e2e": "playwright test",
+    "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
     "react": "19.3.1",

@@ -13,5 +13,5 @@
     "noEmit": true,
     "types": ["chrome", "node", "vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src", "tests", "vite.config.ts", "vitest.config.ts", "vitest.dist.config.ts"]
+  "include": ["src", "tests", "vite.config.ts", "vitest.config.ts", "vitest.dist.config.ts", "playwright.config.ts"]
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSnapshot } from '../useSnapshot';
 import { sendRequest } from '../client';
 import { Button } from '../components/Button';
@@ -10,6 +10,8 @@ import { MemoryPanel } from './MemoryPanel';
 import { TabTable } from './TabTable';
 import { Filters, type FilterKey, type SortKey } from './Filters';
 import { SettingsPanel } from './SettingsPanel';
+import { ChromeSettingsPanel } from './ChromeSettingsPanel';
+import { ActivityLog } from './ActivityLog';
 import {
   createDeviceMemoryProvider, summariseBeforeAfter,
   type BeforeAfter, type DeviceMemoryProvider,
@@ -27,6 +29,10 @@ import { MEMORY_AFTER_DELAY_MS } from '../../domain/constants';
 import type { BatchReport, BlockedReason, Preview, Scope } from '../../background/executor';
 import type { TabRow } from '../../background/inventory';
 import type { ReasonCode } from '../../domain/reason-codes';
+// Type-only, same as the HistoryEntry note in ActivityLog.tsx: platform/ is not subject to
+// the ui/background layering guard, but only the shape is needed here.
+import type { HistoryEntry } from '../../platform/storage';
+import { STATE_CHANGED_MESSAGE } from '../../shared/messages';
 
 const ALL_WINDOWS_SCOPE: Scope = { kind: 'all' };
 
@@ -62,7 +68,10 @@ export const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
 
 type Bulk =
   | { step: 'idle' }
-  | { step: 'ack'; then: () => void }
+  // `cancel` is a separate slot from `then`: Cancel must resolve whatever promise the ack
+  // dialog's caller is awaiting (final-review fix -- see handleUnloadTab below) without
+  // running `then`'s own dispatch. Both close the dialog; only `then` sends a request.
+  | { step: 'ack'; then: () => void; cancel: () => void }
   | { step: 'previewing' }
   | { step: 'ready'; preview: Preview }
   | { step: 'executing'; preview: Preview }
@@ -105,6 +114,13 @@ function hasAcknowledgedBulk(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Same shape-check useSnapshot.ts's own isStateChanged uses, duplicated here (not shared
+ *  runtime code) so the history refresh below can react to the same broadcast. */
+function isStateChangedMessage(message: unknown): boolean {
+  return typeof message === 'object' && message !== null
+    && (message as { type?: unknown }).type === STATE_CHANGED_MESSAGE.type;
 }
 
 function setAcknowledgedBulk(): void {
@@ -167,7 +183,12 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   const [filter, setFilter] = useState<FilterKey>('all');
   const [bulk, setBulk] = useState<Bulk>({ step: 'idle' });
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
-  const [memoryDelta, setMemoryDelta] = useState<BeforeAfter | null>(null);
+  // Tagged with the operationId of the request that produced it, so a reading always says
+  // which action it describes when unloads overlap (most recent still wins).
+  const [memoryDelta, setMemoryDelta] = useState<{ operationId: string; delta: BeforeAfter } | null>(null);
+  // ActivityLog's entries (Task 6/19): fetched here via GET_HISTORY, not inside ActivityLog
+  // itself, which only renders what it is given and issues CLEAR_HISTORY on its own button.
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   // Same unmount/double-submit guards as the popup (App.tsx there); see its comment for why
   // both the busy ref AND the mounted ref are needed.
@@ -181,6 +202,11 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   // Final-review fix: guards the #settings scroll-into-view below so it fires at most
   // once per page load, never again once it has found and scrolled to the element.
   const scrolledToSettingsRef = useRef(false);
+  // Makes the ack dialog (below) reachable for keyboard/screen-reader users: scrolled into
+  // view and focused (on its "Continue" button) the moment it opens, rather than silently
+  // appearing wherever it lands in the DOM.
+  const ackDialogRef = useRef<HTMLDivElement>(null);
+  const continueButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -188,6 +214,39 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       mountedRef.current = false;
     };
   }, []);
+
+  // Task 6/19: ActivityLog's data source. Fetched once on mount and again on every
+  // STATE_CHANGED_MESSAGE broadcast (the background worker sends this after the same
+  // operations that append history rows, per worker-listeners.ts/executor.ts), the same
+  // signal useSnapshot.ts already refreshes the tab snapshot on. A reply that is not an
+  // array (e.g. a test harness's generic `data: null` stub for an unhandled request type)
+  // falls back to the previous list rather than crashing ActivityLog's render.
+  //
+  // Declared, and its effect run, BEFORE the REGISTER_DASHBOARD_ORIGIN effect below: React
+  // runs a component's effects in declaration order, and dashboard.test.tsx's own
+  // "registers ... on mount" tests read `fake.lastRequest` (the single most-recently-sent
+  // message) right after mount expecting REGISTER_DASHBOARD_ORIGIN -- so that call must be
+  // the last one sent on mount, not this one.
+  const refreshHistory = useCallback(() => {
+    void sendRequest<HistoryEntry[]>({ type: 'GET_HISTORY' })
+      .then((entries) => {
+        if (mountedRef.current && Array.isArray(entries)) setHistory(entries);
+      })
+      .catch(() => {
+        // Leave the previous list showing; a transient read failure here does not warrant
+        // its own error state.
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshHistory();
+    const onMessage = (message: unknown) => {
+      if (isStateChangedMessage(message)) refreshHistory();
+      return undefined;
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }, [refreshHistory]);
 
   // Brief Step 3: on mount, register this dashboard's origin tab. The popup deliberately
   // does NOT send this itself (Task 18's ruling) -- it only passes the id along in the URL.
@@ -217,6 +276,15 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     scrolledToSettingsRef.current = true;
     settingsEl.scrollIntoView();
   });
+
+  // The ack dialog can open from either the bulk button or a per-tab "Unload now" click,
+  // wherever the owner's focus happens to be -- without this it can render off-screen or
+  // simply never receive focus, leaving keyboard/screen-reader users with no way to find it.
+  useEffect(() => {
+    if (bulk.step !== 'ack') return;
+    ackDialogRef.current?.scrollIntoView({ block: 'center' });
+    continueButtonRef.current?.focus();
+  }, [bulk.step]);
 
   function matchesFilter(row: TabRow): boolean {
     switch (filter) {
@@ -274,7 +342,10 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     // F2/A23: the warning is shown once per owner, ever (until they clear extension
     // storage), never an "undo" offer -- there is no undo for a discard.
     if (!hasAcknowledgedBulk()) {
-      setBulk({ step: 'ack', then: () => void doPreview() });
+      // This path (unlike handleUnloadTab's below) never awaits a promise around arming the
+      // dialog, so `cancel` has nothing to resolve -- it only needs to close the dialog, same
+      // as `then` already does for its own continuation.
+      setBulk({ step: 'ack', then: () => void doPreview(), cancel: () => setBulk({ step: 'idle' }) });
       return;
     }
     void doPreview();
@@ -283,6 +354,14 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   function handleAcknowledge() {
     setAcknowledgedBulk();
     if (bulk.step === 'ack') bulk.then();
+  }
+
+  /** Cancel's own handler for the ack dialog (final-review fix): distinct from Continue's
+   *  `handleAcknowledge` above, and from a bare `setBulk({ step: 'idle' })`, because closing
+   *  the dialog is not enough on its own -- whichever call armed it may be awaiting a promise
+   *  that only `bulk.cancel()` knows how to resolve (see handleUnloadTab below). */
+  function handleCancelAck() {
+    if (bulk.step === 'ack') bulk.cancel();
   }
 
   async function handleConfirm() {
@@ -310,8 +389,9 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       // Fire-and-forget: the announcement and the busy-release below (this try's own
       // `finally`) must never wait on the 10s after-sample. The "Freed" line simply
       // updates whenever this settles, same as any other async UI update.
+      const operationId = preview.operationId;
       void delta.then((d) => {
-        if (mountedRef.current) setMemoryDelta(d);
+        if (mountedRef.current) setMemoryDelta(d === null ? null : { operationId, delta: d });
       });
     } catch {
       if (mountedRef.current) {
@@ -329,6 +409,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   /** The actual per-tab request, shared by the already-acknowledged path and the ack
    *  continuation below -- neither one touches `bulk` itself; only the caller does. */
   async function dispatchUnloadTab(tabId: number) {
+    const operationId = `tab-${tabId}-${Date.now()}`;
     try {
       const { result: report, delta } = await sampleMemoryAround(
         {
@@ -337,7 +418,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
           wait,
         },
         () => sendRequest<BatchReport>({
-          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single',
+          type: 'UNLOAD_EXECUTE', scope: { kind: 'tab', tabId }, mode: 'manual-single', operationId,
         }),
       );
       if (mountedRef.current) {
@@ -347,7 +428,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
       // `unloading` guard, via handleUnloadTab) must be released as soon as `report` is
       // ready, not after the after-sample.
       void delta.then((d) => {
-        if (mountedRef.current) setMemoryDelta(d);
+        if (mountedRef.current) setMemoryDelta(d === null ? null : { operationId, delta: d });
       });
     } catch {
       if (mountedRef.current) {
@@ -363,18 +444,41 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     // Same one-time warning as the bulk button (F2/A23), armed with this call's own
     // continuation so acknowledging resumes whichever action triggered it.
     if (!hasAcknowledgedBulk()) {
-      setBulk({
-        step: 'ack',
-        then: () => {
-          // Dismiss the ack dialog *before* dispatching, not after: without this, the
-          // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
-          // request settles, and a second stray "Continue" click would re-invoke this
-          // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
-          // synchronously, inside the same click, means there is nothing left in the DOM
-          // for a second click to hit.
-          if (mountedRef.current) setBulk({ step: 'idle' });
-          void dispatchUnloadTab(tabId);
-        },
+      // `bulk.then` is a single slot: a second "Unload now" click (a different tab's row)
+      // while this dialog is still open would silently clobber this call's continuation
+      // (and the `resolve` captured inside it), permanently losing this tab's request and
+      // leaving this row's busy-guard stuck forever (its promise would never resolve). The
+      // dialog already belongs to whichever call armed it first -- treat this click as a
+      // no-op: no second request, no stuck button, nothing overwritten.
+      if (bulk.step === 'ack') return;
+      // Row's `unloading` busy-guard only wraps this call, so it must not resolve until
+      // the real request has actually settled -- otherwise it releases the moment the
+      // dialog is armed, well before "Continue" is even clicked.
+      await new Promise<void>((resolve) => {
+        setBulk({
+          step: 'ack',
+          then: () => {
+            // Dismiss the ack dialog *before* dispatching, not after: without this, the
+            // dialog (gated on bulk.step === 'ack') stays rendered indefinitely once the
+            // request settles, and a second stray "Continue" click would re-invoke this
+            // same closure and re-send UNLOAD_EXECUTE for the same tab. Resetting to idle
+            // synchronously, inside the same click, means there is nothing left in the DOM
+            // for a second click to hit.
+            if (mountedRef.current) setBulk({ step: 'idle' });
+            void dispatchUnloadTab(tabId).finally(resolve);
+          },
+          // Final-review fix: Cancel used to go through a bare `setBulk({ step: 'idle' })`
+          // on the dialog's own button, which discarded this whole object -- `then` along
+          // with the `resolve` it closes over -- without ever calling `resolve`. That left
+          // this `await` permanently pending, so Row's `unloading` busy-guard (its `finally`
+          // never ran) kept "Unload now" disabled for the rest of the page's life. `cancel`
+          // dispatches nothing, unlike `then`, but still has to resolve this same promise so
+          // the caller (and the row's busy-guard) is released either way.
+          cancel: () => {
+            if (mountedRef.current) setBulk({ step: 'idle' });
+            resolve();
+          },
+        });
       });
       return;
     }
@@ -436,14 +540,14 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             </EmptyState>
           ) : null}
           {bulk.step === 'ack' ? (
-            <div role="alertdialog" aria-label="Confirm unloading tabs">
+            <div role="alertdialog" aria-label="Confirm unloading tabs" ref={ackDialogRef} tabIndex={-1}>
               <p>
                 Unloading a tab discards its page: unsaved text, active requests and video
                 position may be lost. Fallow will ask once more only if you clear its storage.
               </p>
               <div className="popup-actions">
-                <Button variant="primary" onClick={handleAcknowledge}>Continue</Button>
-                <Button onClick={() => setBulk({ step: 'idle' })}>Cancel</Button>
+                <Button variant="primary" onClick={handleAcknowledge} ref={continueButtonRef}>Continue</Button>
+                <Button onClick={handleCancelAck}>Cancel</Button>
               </div>
             </div>
           ) : null}
@@ -464,7 +568,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             </div>
           ) : null}
           <MemoryPanel
-            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta}
+            enabled={settings.deviceMemoryMonitoringEnabled} provider={memoryProviderRef.current} delta={memoryDelta?.delta ?? null}
           />
           <Filters
             search={search} onSearch={setSearch}
@@ -478,7 +582,16 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
               rowsById={rowsById} visibleIds={visibleIds} onUnload={handleUnloadTab}
             />
           </div>
-          <SettingsPanel settings={settings} />
+          <SettingsPanel
+            settings={settings}
+            onSaveFailed={(message) => setAnnouncement({ tone: 'alert', text: message })}
+            // Final-review fix: without this, a failed save's alert sticks around forever,
+            // even past a later commit that succeeds -- there was previously nothing that
+            // ever cleared it on the success path.
+            onSaveSucceeded={() => setAnnouncement(null)}
+          />
+          <ChromeSettingsPanel />
+          <ActivityLog entries={history} onCleared={refreshHistory} />
         </>
       )}
       {announcement !== null ? (
