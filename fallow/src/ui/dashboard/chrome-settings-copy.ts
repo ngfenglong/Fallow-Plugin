@@ -1,7 +1,7 @@
 // All shipped copy for the Chrome settings assistance panel (ChromeSettingsPanel) and the
-// activity log (ActivityLog), as exported constants rather than inline JSX strings, so a
-// later copy-rules scan (Task 10/21 -- the "no 'suspend'/'undo'" and similar checks) can
-// read every shipped string here in one place rather than hunting through component files.
+// activity log (ActivityLog), as exported constants rather than inline JSX strings, so the
+// copy-rules scan (Task 10/21 -- the forbidden-word checks in tests/unit/copy-rules.test.ts)
+// can read every shipped string here in one place rather than hunting through component files.
 //
 // Engineering plan F5: each row is a user-clicked link plus a copyable address, never an
 // embedded settings page and never a status switch for a setting Fallow cannot read. Memory

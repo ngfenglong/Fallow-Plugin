@@ -337,7 +337,8 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
 
   function handleBulkClick() {
     // F2/A23: the warning is shown once per owner, ever (until they clear extension
-    // storage), never an "undo" offer -- there is no undo for a discard.
+    // storage). It is a one-time heads-up, not a reversible offer -- there is no way
+    // to reverse a discard afterward.
     if (!hasAcknowledgedBulk()) {
       setBulk({ step: 'ack', then: () => void doPreview() });
       return;
