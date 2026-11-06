@@ -17,7 +17,7 @@ export const SETTINGS_PANEL_TITLE = 'Chrome settings';
 
 export const SETTINGS_PANEL_INTRO =
   'These are Chrome’s own settings, not Fallow’s. Fallow can open the right page for ' +
-  'you, but it cannot turn any of these on or off, and it cannot read most of their current ' +
+  'you, but it cannot turn any of these on or off, and it cannot read their current ' +
   'state.';
 
 export const OPEN_PERFORMANCE_SETTINGS_LABEL = 'Open Chrome performance settings';

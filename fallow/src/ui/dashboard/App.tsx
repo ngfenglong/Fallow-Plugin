@@ -68,7 +68,10 @@ export const PROTECTION_REASONS: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
 
 type Bulk =
   | { step: 'idle' }
-  | { step: 'ack'; then: () => void }
+  // `cancel` is a separate slot from `then`: Cancel must resolve whatever promise the ack
+  // dialog's caller is awaiting (final-review fix -- see handleUnloadTab below) without
+  // running `then`'s own dispatch. Both close the dialog; only `then` sends a request.
+  | { step: 'ack'; then: () => void; cancel: () => void }
   | { step: 'previewing' }
   | { step: 'ready'; preview: Preview }
   | { step: 'executing'; preview: Preview }
@@ -339,7 +342,10 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
     // F2/A23: the warning is shown once per owner, ever (until they clear extension
     // storage), never an "undo" offer -- there is no undo for a discard.
     if (!hasAcknowledgedBulk()) {
-      setBulk({ step: 'ack', then: () => void doPreview() });
+      // This path (unlike handleUnloadTab's below) never awaits a promise around arming the
+      // dialog, so `cancel` has nothing to resolve -- it only needs to close the dialog, same
+      // as `then` already does for its own continuation.
+      setBulk({ step: 'ack', then: () => void doPreview(), cancel: () => setBulk({ step: 'idle' }) });
       return;
     }
     void doPreview();
@@ -348,6 +354,14 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
   function handleAcknowledge() {
     setAcknowledgedBulk();
     if (bulk.step === 'ack') bulk.then();
+  }
+
+  /** Cancel's own handler for the ack dialog (final-review fix): distinct from Continue's
+   *  `handleAcknowledge` above, and from a bare `setBulk({ step: 'idle' })`, because closing
+   *  the dialog is not enough on its own -- whichever call armed it may be awaiting a promise
+   *  that only `bulk.cancel()` knows how to resolve (see handleUnloadTab below). */
+  function handleCancelAck() {
+    if (bulk.step === 'ack') bulk.cancel();
   }
 
   async function handleConfirm() {
@@ -453,6 +467,17 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
             if (mountedRef.current) setBulk({ step: 'idle' });
             void dispatchUnloadTab(tabId).finally(resolve);
           },
+          // Final-review fix: Cancel used to go through a bare `setBulk({ step: 'idle' })`
+          // on the dialog's own button, which discarded this whole object -- `then` along
+          // with the `resolve` it closes over -- without ever calling `resolve`. That left
+          // this `await` permanently pending, so Row's `unloading` busy-guard (its `finally`
+          // never ran) kept "Unload now" disabled for the rest of the page's life. `cancel`
+          // dispatches nothing, unlike `then`, but still has to resolve this same promise so
+          // the caller (and the row's busy-guard) is released either way.
+          cancel: () => {
+            if (mountedRef.current) setBulk({ step: 'idle' });
+            resolve();
+          },
         });
       });
       return;
@@ -522,7 +547,7 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
               </p>
               <div className="popup-actions">
                 <Button variant="primary" onClick={handleAcknowledge} ref={continueButtonRef}>Continue</Button>
-                <Button onClick={() => setBulk({ step: 'idle' })}>Cancel</Button>
+                <Button onClick={handleCancelAck}>Cancel</Button>
               </div>
             </div>
           ) : null}
@@ -560,6 +585,10 @@ export function App({ wait = realWait }: { wait?: (ms: number) => Promise<void> 
           <SettingsPanel
             settings={settings}
             onSaveFailed={(message) => setAnnouncement({ tone: 'alert', text: message })}
+            // Final-review fix: without this, a failed save's alert sticks around forever,
+            // even past a later commit that succeeds -- there was previously nothing that
+            // ever cleared it on the success path.
+            onSaveSucceeded={() => setAnnouncement(null)}
           />
           <ChromeSettingsPanel />
           <ActivityLog entries={history} onCleared={refreshHistory} />

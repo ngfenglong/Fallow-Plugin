@@ -562,6 +562,30 @@ describe('TabTable: Unload now', () => {
     await waitFor(() => expect(button).not.toBeDisabled());
   });
 
+  it('re-enables Unload now when Cancel, not Continue, is clicked on the ack dialog', async () => {
+    // Regression for a stuck busy-guard: Cancel used to go through a bare
+    // `setBulk({ step: 'idle' })` that discarded the `bulk` object -- including the `then`
+    // closure's captured `resolve` -- without ever calling it, so handleUnloadTab's
+    // `await new Promise(...)` never settled and this row's button stayed disabled for
+    // the rest of the page's life.
+    snapshot = snapshotFixture({
+      windows: [windowFixture(1, { ungroupedTabIds: [5] })],
+      rows: [rowFixture({ tabId: 5 })],
+      counts: { total: 1, loaded: 1, unloaded: 0, eligible: 1, protected: 0 },
+    });
+    render(<App />);
+    const button = await screen.findByRole('button', { name: /unload now/i });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole('alertdialog', { name: /confirm unloading tabs/i });
+    expect(button).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(screen.queryByRole('alertdialog', { name: /confirm unloading tabs/i })).toBe(null);
+    // Cancel must never have dispatched a request.
+    expect(fake.calls.unloadExecute).toBe(0);
+  });
+
   it('scrolls to and focuses the ack dialog when it opens', async () => {
     // Reuse the module-scope `scrollIntoViewSpy` (set up in this file's existing
     // beforeEach/afterEach, spying on Element.prototype.scrollIntoView) -- do not

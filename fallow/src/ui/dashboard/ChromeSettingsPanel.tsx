@@ -24,12 +24,14 @@ import {
  */
 export function ChromeSettingsPanel() {
   function handleOpenPerformanceSettings() {
-    try {
-      void chrome.tabs.create({ url: CHROME_PERFORMANCE_SETTINGS_URL });
-    } catch {
+    // Final-review fix: a synchronous try/catch around this call cannot catch a rejection
+    // from the Promise `chrome.tabs.create` returns -- that rejection, if any, surfaces
+    // after this function has already returned, well outside the try block's scope. The
+    // `.catch` below is attached to the promise itself, so it actually observes it.
+    chrome.tabs.create({ url: CHROME_PERFORMANCE_SETTINGS_URL }).catch(() => {
       // The copyable address text below is the fallback when this call is unavailable or
       // blocked in the owner's environment.
-    }
+    });
   }
 
   return (

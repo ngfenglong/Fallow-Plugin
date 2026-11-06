@@ -10,7 +10,15 @@ import { sendRequest } from '../client';
  * monitoring) — not Chrome's settings and not an activity log. Those belong to Task 19,
  * parked, and are deliberately absent here.
  */
-export function SettingsPanel({ settings, onSaveFailed }: { settings: Settings; onSaveFailed: (message: string) => void }) {
+export function SettingsPanel({
+  settings, onSaveFailed, onSaveSucceeded,
+}: {
+  settings: Settings;
+  onSaveFailed: (message: string) => void;
+  /** Final-review fix: a prior failed commit's alert must not outlive a later successful
+   *  one -- called right after a threshold commit actually saves, so App.tsx can clear it. */
+  onSaveSucceeded: () => void;
+}) {
   return (
     <Panel title="Settings" id="settings">
       <Switch
@@ -28,6 +36,7 @@ export function SettingsPanel({ settings, onSaveFailed }: { settings: Settings; 
         onCommit={async (next) => {
           try {
             await sendRequest({ type: 'UPDATE_SETTINGS', patch: { inactivityMinutes: next } });
+            onSaveSucceeded();
           } catch {
             onSaveFailed('Fallow could not save the new threshold. It still shows the old value.');
             throw new Error('revert'); // rethrown so ThresholdInput's commit() reverts its draft
