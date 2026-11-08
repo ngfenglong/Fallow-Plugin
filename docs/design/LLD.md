@@ -1,7 +1,7 @@
 # Fallow — Low-Level Design
 
-**Version:** 0.2.0
-**Status:** versioned independently of the extension itself — this file's version is not a claim of parity with `fallow/package.json` / `fallow/public/manifest.json`'s `version` field, which still reads `0.1.0` as of this writing. The two are expected to converge again only at an actual release-worthy milestone, not on every doc update. Keep this file and `HLD.md` in lockstep with each other — bump both together. See `CLAUDE.md` → "Versioning rule."
+**Version:** 0.3.0
+**Status:** versioned independently of the extension itself — this file's version is not a claim of parity with `fallow/package.json` / `fallow/public/manifest.json`'s `version` field. The two converge only at an actual release milestone, not on every doc update. Keep this file and `HLD.md` in lockstep — bump both together.
 
 **Spec it implements:** `Fallow_Engineering_Plan.md` (root product spec). Argues from `HLD.md` for architecture; this file is the concrete reference beneath it.
 
@@ -10,7 +10,8 @@
 | Version | Date | What changed |
 |---|---|---|
 | 0.1.0 | 2026-11-02 | First write-up, covering the system through the Phase 1 dashboard/popup UX merge. |
-| 0.2.0 | 2026-11-06 | Full "hardening and expansion" plan landed (Tasks 1–10). §1's `ui/dashboard/` row now lists `ActivityLog.tsx`, `ChromeSettingsPanel.tsx`, and `chrome-settings-copy.ts`. §2 updated: `UNLOAD_EXECUTE.operationId` is now threaded through every `ui/` call site, not just carried on the type. §6 updated: the Playwright E2E suite now exists and runs, rather than being only planned. §4 updated: the Chrome-process memory/CPU capability-provider item is closed no-go for this version per the feasibility finding in `docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md`. `processMemory`/`processCpu` keys remain reserved and unregistered; no implementation shipped. |
+| 0.2.0 | 2026-11-06 | §1's `ui/dashboard/` row now lists `ActivityLog.tsx`, `ChromeSettingsPanel.tsx`, and `chrome-settings-copy.ts`. §2 updated: `UNLOAD_EXECUTE.operationId` is now threaded through every `ui/` call site. §4 updated: the Chrome-process memory/CPU capability-provider item is closed no-go for this version per the feasibility finding in `docs/design/findings/2026-11-02-chrome-process-memory-feasibility.md`. |
+| 0.3.0 | 2026-11-07 | Prepared for public release: removed the automated test suite from this public copy and rewrote §6 accordingly; removed internal development-process references. No architecture, capability, or protocol change. |
 
 ## 1. Directory map (`fallow/src/`)
 
@@ -58,7 +59,7 @@ type Request =
 type Response<T> = { ok: true; requestId: string; data: T } | { ok: false; requestId: string; error: string };
 ```
 
-`UNLOAD_EXECUTE.operationId` is threaded through both `ui/` call sites that send it (`ui/dashboard/App.tsx`'s `handleConfirm` and `dispatchUnloadTab`), tagging a result — and the before/after memory reading sampled around it — back to its triggering action. The tag is attached but not yet surfaced anywhere in the UI, so two near-simultaneous unloads can still show a "Freed" figure for the wrong one ("most recent wins"); see the known gap tracked in `docs/TASKS.md`.
+`UNLOAD_EXECUTE.operationId` is threaded through both `ui/` call sites that send it (`ui/dashboard/App.tsx`'s `handleConfirm` and `dispatchUnloadTab`), tagging a result — and the before/after memory reading sampled around it — back to its triggering action. The tag is attached but not yet surfaced anywhere in the UI, so two near-simultaneous unloads can still show a "Freed" figure for the wrong one ("most recent wins"). A future change could either surface the tag in the UI or decide it isn't worth it.
 
 ## 3. Eligibility modes (`domain/eligibility.ts`)
 
@@ -88,16 +89,19 @@ Only `'deviceMemory'` is implemented today (backed by the optional `system.memor
 
 `summariseBeforeAfter(before, after): BeforeAfter` and `formatDelta(deltaBytes): string` are pure helpers used by the dashboard's before/after "Freed" reading (`ui/dashboard/App.tsx`'s `sampleMemoryAround`).
 
-## 5. Layering & safety rules (enforced by tests, not convention alone)
+## 5. Layering & safety rules (rules to keep, not enforced by tests in this copy)
 
-- **Type-only boundary:** `ui/` → `background/` imports must be `import type` only. Pinned test: `tests/unit/ui-components.test.tsx`, `"the ui layer reaches background/ only through type-only imports"`.
+- **Type-only boundary:** `ui/` → `background/` imports must be `import type` only.
 - **No raw HTML for owner-supplied text:** tab/group titles render as plain-text children everywhere, never `innerHTML`/`dangerouslySetInnerHTML`.
 - **Copy rules:** no "suspend"/"undo" in shipped strings; no measurement shown as a fabricated zero when a capability is unavailable (a capability being off/unavailable always skips the reading entirely rather than rendering a zero/NaN stand-in).
 - **Fail-closed policy:** `domain/eligibility.ts` never returns an eligible verdict from an input it cannot interpret.
 
-## 6. Testing conventions
+## 6. Verifying a change
 
-Vitest + `@testing-library/react`, `fireEvent` (not `user-event` — not a repo dependency). `tests/fake-chrome.ts`/`tests/fake-storage.ts` stand in for real browser APIs; no test touches a real browser. `npm run typecheck` runs `tsc --noEmit` in strict mode. A Playwright E2E suite exists at `fallow/tests/e2e/` and runs via `npm run e2e`; two specs are still `test.skip`'d pending a real display/compositor and need the owner's manual verification (`docs/TASKS.md`).
+This public copy of the project ships without its internal automated test suite.
+`npm run typecheck` (strict `tsc --noEmit`) still catches a real class of mistakes.
+Beyond that: read the affected code against this document, then load the built `dist/`
+as an unpacked extension in Chrome and try the behavior for real.
 
 ## 7. Settings schema (`domain/settings.ts` / `domain/types.ts`)
 

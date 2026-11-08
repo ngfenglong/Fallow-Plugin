@@ -98,6 +98,10 @@ Desktop.ini
 .claude/settings.json
 .claude/.credentials.json
 CLAUDE.local.md
+/CLAUDE.md
+
+# ---- Internal task tracking (not for public release) ----
+/docs/TASKS.md
 
 # ---- Scratch ----
 scratch/

@@ -60,7 +60,9 @@ export function SettingsPanel({
         }}
       />
       {settings.protectedSites.length > 0 ? (
-        <ul>
+        <>
+          <p className="settings-help"><strong>Protected sites</strong> — Fallow never unloads a tab on these sites.</p>
+          <ul>
           {settings.protectedSites.map((site) => (
             // CARRY-FORWARD (Task 4): hostnames are stored punycode-normalised; showing the
             // stored form is acceptable here, not a defect (no pinned test asks for Unicode).
@@ -69,7 +71,8 @@ export function SettingsPanel({
               {site.includeSubdomains ? ' (+ subdomains)' : ''}
             </li>
           ))}
-        </ul>
+          </ul>
+        </>
       ) : null}
     </Panel>
   );
