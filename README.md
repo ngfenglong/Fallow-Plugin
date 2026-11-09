@@ -65,6 +65,12 @@ npm run setup   # installs dependencies and builds dist/
 
 Then load the `dist/` folder the same way as above (step 3 onward).
 
+To build the same `.zip` this project's own releases use:
+
+```bash
+npm run package   # -> fallow-<version>.zip
+```
+
 ## Using it
 
 - Click the Fallow icon in your toolbar to open the **popup**. It shows a quick count
@@ -101,12 +107,17 @@ content of any page, and it does not run code on any page you visit.
 
 ## Project docs
 
-- [`docs/design/HLD.md`](../docs/design/HLD.md) — how the project is put together
+- [`docs/design/HLD.md`](docs/design/HLD.md) — how the project is put together
   (high level).
-- [`docs/design/LLD.md`](../docs/design/LLD.md) — the same, in detail (low level): file
+- [`docs/design/LLD.md`](docs/design/LLD.md) — the same, in detail (low level): file
   layout, message formats, rules the code follows.
-- [`Fallow_Engineering_Plan.md`](../Fallow_Engineering_Plan.md) — the original product
-  plan this project was built from.
+- [`docs/design/findings/`](docs/design/findings/) — short write-ups on specific design
+  questions, such as why per-tab memory/CPU reading isn't offered.
 
 If you want to change or improve Fallow, start with the two design docs above — they
-describe the project as it is actually built, not as it was originally planned.
+describe the project as it is actually built.
+
+## License and credits
+
+Fallow is open source under the [MIT License](LICENSE). Its code and icon are original
+work, built with AI assistance (Claude).

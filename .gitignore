@@ -100,8 +100,10 @@ Desktop.ini
 CLAUDE.local.md
 /CLAUDE.md
 
-# ---- Internal task tracking (not for public release) ----
+# ---- Internal planning/process docs (not for public release) ----
 /docs/TASKS.md
+/Fallow_Engineering_Plan.md
+/docs/RELEASE-CHECKLIST.md
 
 # ---- Scratch ----
 scratch/

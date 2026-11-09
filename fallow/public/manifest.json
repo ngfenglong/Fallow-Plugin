@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fallow",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Unloads idle tabs in place to free memory, and shows what it did.",
   "minimum_chrome_version": "120",
   "incognito": "not_allowed",
